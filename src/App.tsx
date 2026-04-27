@@ -22,6 +22,7 @@ import {
   onAuthStateChanged, signOut,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInAnonymously,
   updateProfile,
   User 
 } from 'firebase/auth';
@@ -121,13 +122,24 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     setIsLoggingIn(true);
+    console.log("Starting Google Login...");
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      // Use signInWithPopup - if it fails due to iframe/popup block, alert the user
+      const result = await signInWithPopup(auth, provider);
+      console.log("Google Login Success:", result.user.email);
       setShowLoginModal(false);
     } catch (error: any) {
       console.error("Google Login Error:", error);
-      alert(`Erro ao acessar com Google: ${error.message}`);
+      let msg = "Erro ao acessar com Google.";
+      if (error.code === 'auth/popup-blocked') {
+        msg = "O popup de login foi bloqueado pelo seu navegador. Por favor, permita popups para este site.";
+      } else if (error.code === 'auth/popup-closed-by-user') {
+        msg = "O login foi cancelado pelo usuário.";
+      } else {
+        msg += ` Detalhes: ${error.message}`;
+      }
+      alert(msg);
     } finally {
       setIsLoggingIn(false);
     }
@@ -137,30 +149,53 @@ export default function App() {
     e.preventDefault();
     const { nickname, password } = loginForm;
     
-    if (TEST_USERS[nickname] !== password) {
+    const userKey = Object.keys(TEST_USERS).find(
+      k => k.toLowerCase() === nickname.toLowerCase()
+    );
+
+    if (!userKey || TEST_USERS[userKey] !== password) {
       alert("Usuário ou senha inválidos para este ambiente de teste.");
       return;
     }
 
     setIsLoggingIn(true);
-    const email = `${nickname.toLowerCase()}@galhas.app.test`;
+    // Use the matched userKey for consistent display and naming
+    const email = `${userKey.toLowerCase().replace(/\s+/g, '_')}@galhas.app.test`;
     
     try {
-      // Try to login with Firebase Auth to get a real session (needed for Firestore Rules)
+      console.log("Attempting Test Login for:", email);
       try {
         await signInWithEmailAndPassword(auth, email, password);
+        console.log("Test Login (Email) Success");
       } catch (err: any) {
-        // If user doesn't exist, bootstrap it (test env convenience)
+        console.warn("Email login failed, checking if creation is needed:", err.code);
+        // If provider is disabled or user not found, we might need another approach
         if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.message.includes('INVALID_LOGIN_CREDENTIALS')) {
           try {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
             await updateProfile(userCredential.user, {
-              displayName: nickname.replace('_', ' ')
+              displayName: userKey.replace('_', ' ')
             });
-          } catch (createErr) {
-            // If already exists but password was wrong, original catch handles it
-            throw err;
+            console.log("Test User created and logged in");
+          } catch (createErr: any) {
+            console.error("Failed to create test user:", createErr);
+            // If email provider is disabled, fall back to Anonymous + Custom Data if possible
+            if (createErr.code === 'auth/operation-not-allowed') {
+              console.log("Email provider disabled, falling back to Anonymous Login for test user");
+              const anonResult = await signInAnonymously(auth);
+              await updateProfile(anonResult.user, {
+                displayName: userKey.replace('_', ' ')
+              });
+            } else {
+              throw createErr;
+            }
           }
+        } else if (err.code === 'auth/operation-not-allowed') {
+          console.log("Email provider disabled, falling back to Anonymous Login for test user");
+          const anonResult = await signInAnonymously(auth);
+          await updateProfile(anonResult.user, {
+            displayName: userKey.replace('_', ' ')
+          });
         } else {
           throw err;
         }
@@ -168,8 +203,8 @@ export default function App() {
       setShowLoginModal(false);
       setLoginForm({ nickname: '', password: '' });
     } catch (error: any) {
-      console.error("Test Login Error:", error);
-      alert(`Erro ao acessar: ${error.message}`);
+      console.error("Test Login Final Error:", error);
+      alert(`Erro no login de teste: ${error.message}`);
     } finally {
       setIsLoggingIn(false);
     }
@@ -287,20 +322,20 @@ export default function App() {
         }
 
         const totalItems = data.length;
-        setUploadProgress({ current: 0, total: totalItems, step: 'Processando registros...' });
+        setUploadProgress({ current: 0, total: totalItems, step: 'Iniciando processamento...' });
 
         // Helper to find column case-insensitively and ignoring spaces
         const getRowVal = (row: any, aliases: string[]) => {
           const keys = Object.keys(row);
           const foundKey = keys.find(k => {
-            const normalizedK = k.toLowerCase().replace(/[\s_.-]/g, '');
+            const normalizedK = String(k).toLowerCase().replace(/[\s_.-]/g, '');
             return aliases.some(alias => normalizedK === alias.toLowerCase().replace(/[\s_.-]/g, ''));
           });
           return foundKey ? row[foundKey] : undefined;
         };
 
         const parseCoord = (val: any) => {
-          if (val === undefined || val === null) return NaN;
+          if (val === undefined || val === null || val === "") return NaN;
           if (typeof val === 'number') return val;
           if (typeof val === 'string') {
             const normalized = val.replace(',', '.').trim();
@@ -313,16 +348,31 @@ export default function App() {
         const collectionPath = type === 'base' ? 'base_trees' : 'tree_records';
         
         // Firestore batches are limited to 500 operations.
-        // We will process in chunks of 400 to be safe.
-        const CHUNK_SIZE = 400;
+        // We will use smaller chunks and a small delay to avoid rate limiting
+        const CHUNK_SIZE = 250; 
         let successfulCount = 0;
+        let errorCount = 0;
+
+        // Function to commit a batch with retries
+        const commitWithRetry = async (batch: any, retries = 3): Promise<void> => {
+          try {
+            await batch.commit();
+          } catch (error: any) {
+            if (retries > 0 && (error.code === 'unavailable' || error.code === 'resource-exhausted')) {
+              console.warn(`Lote falhou. Tentando novamente... (${retries} tentativas restantes)`);
+              await new Promise(r => setTimeout(r, 2000)); // Wait 2s
+              return commitWithRetry(batch, retries - 1);
+            }
+            throw error;
+          }
+        };
 
         for (let i = 0; i < data.length; i += CHUNK_SIZE) {
           const chunk = data.slice(i, i + CHUNK_SIZE);
           const batch = writeBatch(db);
           let itemsInBatch = 0;
 
-          chunk.forEach((row) => {
+          chunk.forEach((row, indexInChunk) => {
             const speciesVal = getRowVal(row, ['species', 'especie', 'nome', 'taxon', 'arvore', 'nomecientifico']);
             const species = (typeof speciesVal === 'string' ? speciesVal : 'Não identificado').slice(0, 190);
             
@@ -333,7 +383,7 @@ export default function App() {
             const lng = parseCoord(lngVal);
             
             const regionVal = getRowVal(row, ['region', 'regiao', 'bairro', 'local', 'distrito']);
-            const region = regionVal || 'BH';
+            const region = String(regionVal || 'BH').slice(0, 100);
 
             if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
               const docRef = doc(collection(db, collectionPath));
@@ -343,7 +393,7 @@ export default function App() {
               if (type === 'gall') tags.push('Galha');
               if (type === 'base') tags.push('Base');
 
-              // Identify extra columns to preserve "spreadsheet format"
+              // Preserve extra metadata
               const extraData: Record<string, any> = {};
               const processedKeys = [
                 'species', 'especie', 'nome', 'taxon', 'arvore', 'nomecientifico',
@@ -353,9 +403,13 @@ export default function App() {
               ];
               
               Object.keys(row).forEach(key => {
-                const normalizedK = key.toLowerCase().replace(/[\s_.-]/g, '');
+                const normalizedK = String(key).toLowerCase().replace(/[\s_.-]/g, '');
                 if (!processedKeys.includes(normalizedK)) {
-                  extraData[key] = row[key];
+                  const val = row[key];
+                  // Ensure data is simple enough for Firestore
+                  if (typeof val !== 'object') {
+                    extraData[key] = val;
+                  }
                 }
               });
 
@@ -373,18 +427,35 @@ export default function App() {
                 additionalInfo: extraData
               });
               itemsInBatch++;
-              successfulCount++;
+            } else {
+              if (i === 0 && indexInChunk < 5) {
+                console.log(`Pulando linha ${i + indexInChunk} por coordenadas inválidas:`, {lat, lng, row});
+              }
             }
           });
 
           if (itemsInBatch > 0) {
-            setUploadProgress(prev => ({ ...prev, current: i + itemsInBatch, step: `Enviando lote ${Math.floor(i / CHUNK_SIZE) + 1}...` }));
-            await batch.commit();
+            setUploadProgress(prev => ({ 
+              ...prev, 
+              current: i + itemsInBatch, 
+              step: `Enviando lote ${Math.floor(i / CHUNK_SIZE) + 1} (${Math.round(((i + itemsInBatch)/totalItems)*100)}%)...` 
+            }));
+            
+            try {
+              await commitWithRetry(batch);
+              successfulCount += itemsInBatch;
+              // Small throttle to stay under Firestore sustained write limits for large imports
+              await new Promise(r => setTimeout(r, 150)); 
+            } catch (err) {
+              console.error(`Falha crítica no lote começando em ${i}:`, err);
+              errorCount += itemsInBatch;
+            }
           }
         }
 
         if (successfulCount > 0) {
-          alert(`Sucesso! ${successfulCount} registros importados na categoria: ${type}.`);
+          const errorMsg = errorCount > 0 ? `\n\nNote: ${errorCount} registros falharam no envio.` : '';
+          alert(`Sucesso! ${successfulCount} registros importados na categoria: ${type}.${errorMsg}`);
         } else {
           const headers = Object.keys(data[0] || {}).join(', ');
           alert(`Aviso: Nenhum registro válido encontrado. \n\nDetectamos estas colunas na sua planilha: [${headers}]. \n\nVerifique se as colunas de Latitude e Longitude possuem números válidos (ex: lat, long, latitude, longitude, X, Y). Se você usa vírgula como separador decimal, o sistema tentará converter automaticamente.`);
@@ -528,8 +599,14 @@ export default function App() {
                   disabled={isLoggingIn}
                   className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-2xl hover:bg-[#1B3A18] transition-all flex items-center justify-center gap-3 mt-4 disabled:opacity-50"
                 >
-                  {isLoggingIn ? <Loader2 className="animate-spin" /> : <>Acessar Sistema <ChevronRight size={20} /></>}
+                  {isLoggingIn ? <Loader2 className="animate-spin" /> : <>Entrar na Plataforma <LogIn size={20} /></>}
                 </button>
+
+                <div className="mt-2 text-center">
+                  <p className="text-[10px] text-[#9E9E9E] font-medium">
+                    Sugestão de teste: Reisila_Mendes (senha: galhas123)
+                  </p>
+                </div>
 
                 <div className="relative my-6">
                   <div className="absolute inset-0 flex items-center">
