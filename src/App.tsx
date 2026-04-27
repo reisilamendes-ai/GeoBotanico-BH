@@ -97,6 +97,15 @@ export default function App() {
       setUser(u);
       setLoading(false);
     });
+    return () => unsubscribeAuth();
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setItems([]);
+      setBaseTrees([]);
+      return;
+    }
 
     const q = query(collection(db, 'tree_records'), orderBy('createdAt', 'desc'));
     const unsubscribeFirestore = onSnapshot(q, (snapshot) => {
@@ -117,15 +126,14 @@ export default function App() {
       })) as TreeRecord[];
       setBaseTrees(records);
     }, (error) => {
-      console.warn("Base trees could not be loaded, possibly empty.");
+      console.warn("Base trees load warning:", error);
     });
 
     return () => {
-      unsubscribeAuth();
       unsubscribeFirestore();
       unsubscribeBase();
     };
-  }, []);
+  }, [user]);
 
   const handleLogin = async () => {
     try {
