@@ -19,7 +19,11 @@ import {
 } from 'firebase/firestore';
 import { 
   signInWithPopup, GoogleAuthProvider, 
-  onAuthStateChanged, signOut, User 
+  onAuthStateChanged, signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  User 
 } from 'firebase/auth';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -79,7 +83,10 @@ export default function App() {
   const [isUploadingXlsx, setIsUploadingXlsx] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, step: '' });
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [loginForm, setLoginForm] = useState({ nickname: '', password: '' });
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const researchInputRef = useRef<HTMLInputElement>(null);
   const baseInputRef = useRef<HTMLInputElement>(null);
@@ -119,22 +126,45 @@ export default function App() {
     }
   }, []);
 
-  const handleTestLogin = (e: React.FormEvent) => {
+  const handleTestLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const { nickname, password } = loginForm;
     
-    if (TEST_USERS[nickname] === password) {
-      const mockUser = {
-        uid: `test_${nickname.toLowerCase()}`,
-        displayName: nickname.replace('_', ' '),
-        email: `${nickname.toLowerCase()}@test.com`,
-        isTestUser: true
-      };
-      setUser(mockUser);
-      localStorage.setItem('geo_botanico_user', JSON.stringify(mockUser));
-      setShowLoginModal(false);
-    } else {
+    if (TEST_USERS[nickname] !== password) {
       alert("Usuário ou senha inválidos para este ambiente de teste.");
+      return;
+    }
+
+    setIsLoggingIn(true);
+    const email = `${nickname.toLowerCase()}@galhas.app.test`;
+    
+    try {
+      // Try to login with Firebase Auth to get a real session (needed for Firestore Rules)
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+      } catch (err: any) {
+        // If user doesn't exist, bootstrap it (test env convenience)
+        if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.message.includes('INVALID_LOGIN_CREDENTIALS')) {
+          try {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            await updateProfile(userCredential.user, {
+              displayName: nickname.replace('_', ' ')
+            });
+          } catch (createErr) {
+            // If already exists but password was wrong, original catch handles it
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
+      setShowLoginModal(false);
+      setLoginForm({ nickname: '', password: '' });
+    } catch (error: any) {
+      console.error("Test Login Error:", error);
+      alert(`Erro ao acessar: ${error.message}`);
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -418,11 +448,81 @@ export default function App() {
                 </div>
                 <button 
                   type="submit"
-                  className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-2xl hover:bg-[#1B3A18] transition-all flex items-center justify-center gap-3 mt-4"
+                  disabled={isLoggingIn}
+                  className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-2xl hover:bg-[#1B3A18] transition-all flex items-center justify-center gap-3 mt-4 disabled:opacity-50"
                 >
-                  Acessar Sistema <ChevronRight size={20} />
+                  {isLoggingIn ? <Loader2 className="animate-spin" /> : <>Acessar Sistema <ChevronRight size={20} /></>}
                 </button>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Template Guide Modal */}
+      <AnimatePresence>
+        {showTemplateModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-[#3E2723]/60 backdrop-blur-sm z-[220] flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white p-8 rounded-[32px] shadow-2xl max-w-xl w-full relative overflow-hidden"
+            >
+              <button 
+                onClick={() => setShowTemplateModal(false)}
+                className="absolute top-6 right-6 text-[#9E9E9E] hover:text-black z-10"
+              >
+                <X size={24} />
+              </button>
+
+              <div className="flex items-center gap-4 mb-6">
+                <div className="bg-[#E67E22] p-3 rounded-2xl text-white">
+                  <FileSpreadsheet size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-serif font-bold text-[#2D5A27]">Modelo de Tabela Válido</h3>
+                  <p className="text-xs text-[#5D4037]">Certifique-se que sua planilha possui estas colunas:</p>
+                </div>
+              </div>
+
+              <div className="bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl overflow-hidden mb-6">
+                <div className="grid grid-cols-4 bg-[#D7CCC8]/20 p-3 text-[10px] font-bold uppercase tracking-wider text-[#5D4037] border-b border-[#D7CCC8]/30">
+                  <div>especie</div>
+                  <div>latitude</div>
+                  <div>longitude</div>
+                  <div>regiao</div>
+                </div>
+                <div className="grid grid-cols-4 p-3 text-sm text-[#3E2723] gap-y-2 font-mono">
+                  <div className="text-blue-600">Sibipiruna</div>
+                  <div>-19.9213</div>
+                  <div>-43.9412</div>
+                  <div>Centro</div>
+                  
+                  <div className="text-blue-600">Ipê Amarelo</div>
+                  <div>-19.9345</div>
+                  <div>-43.9102</div>
+                  <div>Savassi</div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs text-[#5D4037] leading-relaxed">
+                  • <strong>Coordenadas:</strong> Devem ser números decimais (ex: -19.92).<br/>
+                  • <strong>Variantes aceitas:</strong> O sistema também reconhece <i>lat, lng, long, x, y, arvore, bairro</i>.<br/>
+                  • <strong>Formato:</strong> Use arquivos .XLSX ou .XLS.
+                </p>
+                <button 
+                  onClick={() => setShowTemplateModal(false)}
+                  className="w-full bg-[#2D5A27] text-white py-3 rounded-xl font-bold text-sm mt-4"
+                >
+                  Entendi, fechar!
+                </button>
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -499,9 +599,9 @@ export default function App() {
               <div className="flex items-center gap-4">
                 <div className="hidden lg:block text-right">
                   <p className="text-[10px] text-[#E8F5E9] uppercase tracking-wider font-sans opacity-80">
-                    {user.isTestUser ? 'Acesso Especial' : 'Pesquisador Logado'}
+                    {user.email?.includes('test.com') ? 'Acesso Especial' : 'Pesquisador Logado'}
                   </p>
-                  <p className="text-sm font-bold text-white">{user.displayName}</p>
+                  <p className="text-sm font-bold text-white">{user.displayName || user.email?.split('@')[0]}</p>
                 </div>
                 <button 
                   onClick={() => setIsAdding(!isAdding)}
@@ -521,15 +621,9 @@ export default function App() {
               <div className="flex gap-2">
                 <button 
                   onClick={() => setShowLoginModal(true)}
-                  className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl font-bold text-xs transition-all border border-white/20"
+                  className="bg-[#E67E22] text-white px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg hover:bg-[#D35400] transition-all flex items-center gap-2"
                 >
-                  Login Teste
-                </button>
-                <button 
-                  onClick={() => signInWithPopup(auth, googleProvider)}
-                  className="bg-[#E67E22] text-white px-4 py-2 rounded-xl font-bold text-xs shadow-md hover:bg-[#D35400] transition-all flex items-center gap-2"
-                >
-                  <Globe size={14} /> Google
+                  <LogIn size={14} /> Login Teste
                 </button>
               </div>
             )}
@@ -829,6 +923,16 @@ export default function App() {
                 <h3 className="font-sans font-extrabold text-[15px] uppercase tracking-wider">Laboratório RAG</h3>
               </div>
               {isUploadingXlsx && <Loader2 size={16} className="animate-spin text-[#E67E22]" />}
+            </div>
+            
+            <div className="flex items-center justify-between">
+               <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#BCAAA4]">Integração Labs</h4>
+               <button 
+                onClick={() => setShowTemplateModal(true)}
+                className="text-[10px] font-bold text-[#E67E22] hover:underline flex items-center gap-1"
+               >
+                 <FileSearch size={12} /> Ver Modelo de Tabela
+               </button>
             </div>
             
             <p className="text-[11px] text-[#D7CCC8] leading-relaxed font-sans">
