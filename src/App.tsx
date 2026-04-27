@@ -112,18 +112,11 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Check for saved test user
-    const savedUser = localStorage.getItem('geo_botanico_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
+    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+      setUser(u);
       setLoading(false);
-    } else {
-      const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-        if (u) setUser(u);
-        setLoading(false);
-      });
-      return () => unsubscribeAuth();
-    }
+    });
+    return () => unsubscribeAuth();
   }, []);
 
   const handleTestLogin = async (e: React.FormEvent) => {
@@ -169,7 +162,6 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    localStorage.removeItem('geo_botanico_user');
     await auth.signOut();
     setUser(null);
   };
@@ -251,6 +243,8 @@ export default function App() {
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws) as any[];
+        console.log("XLSX Data sample:", data[0]);
+        console.log("XLSX Headers detected:", Object.keys(data[0] || {}));
 
         if (!data || data.length === 0) {
           throw new Error("A planilha parece estar vazia.");

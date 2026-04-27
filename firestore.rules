@@ -22,8 +22,8 @@ service cloud.firestore {
 
     // Validation Helpers
     function isValidTreeRecord(data) {
-      return data.species is string && data.species.size() <= 200 &&
-             data.location is map && data.location.lat is number && data.location.lng is number &&
+      return data.species is string && 
+             data.location is map && 
              data.researcherId == request.auth.uid;
     }
 
@@ -36,8 +36,7 @@ service cloud.firestore {
     // --- Collections ---
 
     match /tree_records/{treeId} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn() && isValidId(treeId) && isValidTreeRecord(incoming());
       allow update: if isSignedIn() && (
         isAdmin() || (
@@ -50,7 +49,7 @@ service cloud.firestore {
     }
 
     match /base_trees/{treeId} {
-      allow read: if isSignedIn();
+      allow read: if true;
       allow create: if isSignedIn() && isValidId(treeId) && isValidTreeRecord(incoming());
       allow update, delete: if isAdmin();
     }
