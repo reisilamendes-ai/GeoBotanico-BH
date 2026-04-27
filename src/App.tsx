@@ -184,32 +184,47 @@ export default function App() {
         const collectionPath = type === 'base' ? 'base_trees' : 'tree_records';
         const batch = writeBatch(db);
         
+        let count = 0;
         data.forEach((row) => {
-          const docRef = doc(collection(db, collectionPath));
-          const tags = row.tags ? String(row.tags).split(',') : [];
-          
-          if (type === 'research') tags.push('Hospedeira');
-          if (type === 'gall') tags.push('Galha');
+          // Robust mapping for common variations
+          const species = row.species || row.especie || row.Especie || row.NOME_CIENTIFICO || row.Nome || 'Não identificado';
+          const lat = Number(row.lat || row.latitude || row.LATITUDE || row.Lat);
+          const lng = Number(row.lng || row.long || row.longitude || row.LONGITUDE || row.Long);
+          const region = row.region || row.regiao || row.Regiao || row.BAIRRO || 'BH';
 
-          batch.set(docRef, {
-            species: row.species || row.especie || 'Não identificado',
-            location: {
-              lat: Number(row.lat || row.latitude),
-              lng: Number(row.lng || row.long || row.longitude),
-              region: row.region || row.regiao || 'BH'
-            },
-            tags: tags,
-            researcherId: user.uid,
-            researcherName: user.displayName || 'Sistema',
-            createdAt: serverTimestamp()
-          });
+          if (!isNaN(lat) && !isNaN(lng)) {
+            const docRef = doc(collection(db, collectionPath));
+            const tags = row.tags ? String(row.tags).split(',') : [];
+            
+            if (type === 'research') tags.push('Hospedeira');
+            if (type === 'gall') tags.push('Galha');
+            if (type === 'base') tags.push('Base');
+
+            batch.set(docRef, {
+              species: species,
+              location: {
+                lat: lat,
+                lng: lng,
+                region: region
+              },
+              tags: tags,
+              researcherId: user.uid,
+              researcherName: user.displayName || 'Sistema',
+              createdAt: serverTimestamp()
+            });
+            count++;
+          }
         });
 
-        await batch.commit();
-        alert(`${data.length} registros importados com sucesso na categoria: ${type}!`);
+        if (count > 0) {
+          await batch.commit();
+          alert(`${count} registros importados com sucesso na categoria: ${type}!`);
+        } else {
+          alert("Nenhum registro válido encontrado. Verifique as colunas de Latitude e Longitude.");
+        }
       } catch (error) {
         console.error("Error importing XLSX:", error);
-        alert("Erro ao processar a planilha. Verifique o formato.");
+        alert("Erro ao processar a planilha. Verifique se o arquivo está no formato correto (.xlsx ou .xls).");
       } finally {
         setIsUploadingXlsx(false);
         if (e.target) e.target.value = '';
@@ -625,7 +640,7 @@ export default function App() {
             </div>
             
             <p className="text-[11px] text-[#D7CCC8] leading-relaxed font-sans">
-              Importe planilha de árvores (.XLSX) ou indexe artigos para contextualizar suas descobertas.
+              Importe planilha de árvores (.XLSX) para povoar o mapa. Use colunas como: **especie, latitude, longitude, regiao**.
             </p>
 
             <div className="grid grid-cols-2 gap-3">

@@ -24,8 +24,7 @@ service cloud.firestore {
     function isValidTreeRecord(data) {
       return data.species is string && data.species.size() <= 200 &&
              data.location is map && data.location.lat is number && data.location.lng is number &&
-             data.researcherId == request.auth.uid &&
-             data.createdAt == request.time;
+             data.researcherId == request.auth.uid;
     }
 
     function isValidGallAnalysis(data) {
@@ -52,7 +51,8 @@ service cloud.firestore {
 
     match /base_trees/{treeId} {
       allow read: if isSignedIn();
-      allow write: if isVerifiedEmail();
+      allow create: if isVerifiedEmail() && isValidId(treeId) && isValidTreeRecord(incoming());
+      allow update, delete: if isAdmin();
     }
 
     match /scientific_papers/{paperId} {

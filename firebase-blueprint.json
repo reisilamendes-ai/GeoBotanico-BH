@@ -56,6 +56,10 @@
       "schema": "GallAnalysis",
       "description": "Subcollection for gall analyses associated with a tree."
     },
+    "/base_trees/{treeId}": {
+      "schema": "TreeRecord",
+      "description": "Collection for background population trees (Gray points)."
+    },
     "/scientific_papers/{paperId}": {
       "schema": "ScientificPaper",
       "description": "Collection for meta-information about research papers."
