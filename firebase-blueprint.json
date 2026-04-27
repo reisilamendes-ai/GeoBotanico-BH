@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "TreeRecord": {
+      "title": "Tree Record",
+      "description": "Information about a tree mapped in Belo Horizonte.",
+      "type": "object",
+      "properties": {
+        "species": { "type": "string", "description": "Common or scientific name of the tree" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "region": { "type": "string", "description": "Region of BH (e.g., Centro-Sul, Pampulha)" }
+          },
+          "required": ["lat", "lng"]
+        },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "researcherId": { "type": "string" },
+        "researcherName": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["species", "location", "researcherId", "createdAt"]
+    },
+    "GallAnalysis": {
+      "title": "Gall Analysis",
+      "description": "Specific analysis of galls on a tree.",
+      "type": "object",
+      "properties": {
+        "presence": { "type": "boolean" },
+        "morphology": { "type": "string" },
+        "intensity": { "type": "string", "enum": ["Low", "Medium", "High"] },
+        "notes": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["presence"]
+    },
+    "ScientificPaper": {
+      "title": "Scientific Paper",
+      "description": "Metadata for indexed papers used for RAG.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "url": { "type": "string" },
+        "indexedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "url"]
+    }
+  },
+  "firestore": {
+    "/tree_records/{treeId}": {
+      "schema": "TreeRecord",
+      "description": "Main collection for tree records."
+    },
+    "/tree_records/{treeId}/gall_analyses/{analysisId}": {
+      "schema": "GallAnalysis",
+      "description": "Subcollection for gall analyses associated with a tree."
+    },
+    "/scientific_papers/{paperId}": {
+      "schema": "ScientificPaper",
+      "description": "Collection for meta-information about research papers."
+    }
+  }
+}

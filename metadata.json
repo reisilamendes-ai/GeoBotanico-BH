@@ -1,0 +1,13 @@
+{
+  "name": "GeoBotânico-BH",
+  "description": "Assistente de IA e mapeamento da flora urbana de Belo Horizonte, focado na análise de galhas e pesquisa botânica.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "AI-powered data analysis",
+    "Geospatial mapping",
+    "Scientific paper indexing (RAG)"
+  ]
+}

@@ -1,0 +1,45 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", Georgia, ui-serif, serif;
+}
+
+@import "leaflet/dist/leaflet.css";
+
+@layer base {
+  body {
+    @apply antialiased bg-[#FDFBF7] text-[#3E2723];
+  }
+}
+
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  background-color: #f8f9fa;
+}
+
+.leaflet-marker-icon {
+  transition: transform 0.2s ease-out;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-[#D7CCC8] rounded-full hover:bg-[#BCAAA4];
+}
+
+.natural-card {
+  @apply bg-white border border-[#D7CCC8] rounded-[24px] shadow-[0_4px_20px_rgba(62,39,35,0.05)];
+}
+
+.btn-primary {
+  @apply bg-[#E67E22] hover:bg-[#D35400] text-white px-6 py-2.5 rounded-full font-bold transition-all shadow-[0_4px_0_#D35400] active:translate-y-0.5 active:shadow-none;
+}
+

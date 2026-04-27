@@ -1,0 +1,63 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isVerifiedEmail() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isAdmin() { 
+      return isSignedIn() && (
+        request.auth.token.email == 'reisilamendes@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // Validation Helpers
+    function isValidTreeRecord(data) {
+      return data.species is string && data.species.size() <= 200 &&
+             data.location is map && data.location.lat is number && data.location.lng is number &&
+             data.researcherId == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    function isValidGallAnalysis(data) {
+      return data.presence is bool &&
+             (data.keys().hasAll(['morphology']) ? data.morphology is string : true) &&
+             (data.keys().hasAll(['intensity']) ? data.intensity in ['Low', 'Medium', 'High'] : true);
+    }
+
+    // --- Collections ---
+
+    match /tree_records/{treeId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isVerifiedEmail() && isValidId(treeId) && isValidTreeRecord(incoming());
+      allow update: if isVerifiedEmail() && (
+        isAdmin() || (
+          existing().researcherId == request.auth.uid &&
+          isValidTreeRecord(incoming()) &&
+          incoming().researcherId == existing().researcherId
+        )
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /base_trees/{treeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /scientific_papers/{paperId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+  }
+}
