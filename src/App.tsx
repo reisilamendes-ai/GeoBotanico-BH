@@ -76,6 +76,7 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
   const [isUploadingXlsx, setIsUploadingXlsx] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, step: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const researchInputRef = useRef<HTMLInputElement>(null);
   const baseInputRef = useRef<HTMLInputElement>(null);
@@ -172,65 +173,92 @@ export default function App() {
     if (!file || !user) return;
 
     setIsUploadingXlsx(true);
+    setUploadProgress({ current: 0, total: 0, step: 'Lendo arquivo...' });
+
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result as string;
-        const wb = XLSX.read(bstr, { type: 'binary' });
+        const dataBuffer = evt.target?.result as ArrayBuffer;
+        const wb = XLSX.read(dataBuffer, { type: 'array' });
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
         const data = XLSX.utils.sheet_to_json(ws) as any[];
 
-        const collectionPath = type === 'base' ? 'base_trees' : 'tree_records';
-        const batch = writeBatch(db);
-        
-        let count = 0;
-        data.forEach((row) => {
-          // Robust mapping for common variations
-          const species = row.species || row.especie || row.Especie || row.NOME_CIENTIFICO || row.Nome || 'Não identificado';
-          const lat = Number(row.lat || row.latitude || row.LATITUDE || row.Lat);
-          const lng = Number(row.lng || row.long || row.longitude || row.LONGITUDE || row.Long);
-          const region = row.region || row.regiao || row.Regiao || row.BAIRRO || 'BH';
-
-          if (!isNaN(lat) && !isNaN(lng)) {
-            const docRef = doc(collection(db, collectionPath));
-            const tags = row.tags ? String(row.tags).split(',') : [];
-            
-            if (type === 'research') tags.push('Hospedeira');
-            if (type === 'gall') tags.push('Galha');
-            if (type === 'base') tags.push('Base');
-
-            batch.set(docRef, {
-              species: species,
-              location: {
-                lat: lat,
-                lng: lng,
-                region: region
-              },
-              tags: tags,
-              researcherId: user.uid,
-              researcherName: user.displayName || 'Sistema',
-              createdAt: serverTimestamp()
-            });
-            count++;
-          }
-        });
-
-        if (count > 0) {
-          await batch.commit();
-          alert(`${count} registros importados com sucesso na categoria: ${type}!`);
-        } else {
-          alert("Nenhum registro válido encontrado. Verifique as colunas de Latitude e Longitude.");
+        if (!data || data.length === 0) {
+          throw new Error("A planilha parece estar vazia.");
         }
-      } catch (error) {
+
+        const totalItems = data.length;
+        setUploadProgress({ current: 0, total: totalItems, step: 'Processando registros...' });
+
+        const collectionPath = type === 'base' ? 'base_trees' : 'tree_records';
+        
+        // Firestore batches are limited to 500 operations.
+        // We will process in chunks of 400 to be safe.
+        const CHUNK_SIZE = 400;
+        let successfulCount = 0;
+
+        for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+          const chunk = data.slice(i, i + CHUNK_SIZE);
+          const batch = writeBatch(db);
+          let itemsInBatch = 0;
+
+          chunk.forEach((row) => {
+            const species = row.species || row.especie || row.Especie || row.NOME_CIENTIFICO || row.Nome || row.Taxon || 'Não identificado';
+            const lat = Number(row.lat || row.latitude || row.LATITUDE || row.Lat || row.Y || row.CoordY);
+            const lng = Number(row.lng || row.long || row.longitude || row.LONGITUDE || row.Long || row.X || row.CoordX);
+            const region = row.region || row.regiao || row.Regiao || row.BAIRRO || row.Local || 'BH';
+
+            if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+              const docRef = doc(collection(db, collectionPath));
+              const tags = row.tags ? String(row.tags).split(',').map((t: string) => t.trim()) : [];
+              
+              if (type === 'research') tags.push('Hospedeira');
+              if (type === 'gall') tags.push('Galha');
+              if (type === 'base') tags.push('Base');
+
+              batch.set(docRef, {
+                species: species,
+                location: {
+                  lat: lat,
+                  lng: lng,
+                  region: region
+                },
+                tags: tags,
+                researcherId: user.uid,
+                researcherName: user.displayName || 'Sistema',
+                createdAt: serverTimestamp()
+              });
+              itemsInBatch++;
+              successfulCount++;
+            }
+          });
+
+          if (itemsInBatch > 0) {
+            setUploadProgress(prev => ({ ...prev, current: i + itemsInBatch, step: `Enviando lote ${Math.floor(i / CHUNK_SIZE) + 1}...` }));
+            await batch.commit();
+          }
+        }
+
+        if (successfulCount > 0) {
+          alert(`${successfulCount} registros importados com sucesso na categoria: ${type}!`);
+        } else {
+          alert("Nenhum registro válido encontrado. Verifique se as colunas de Latitude e Longitude estão corretas (ex: lat, long, latitude, longitude).");
+        }
+      } catch (error: any) {
         console.error("Error importing XLSX:", error);
-        alert("Erro ao processar a planilha. Verifique se o arquivo está no formato correto (.xlsx ou .xls).");
+        alert(`Erro ao processar a planilha: ${error.message || "Verifique o formato do arquivo."}`);
       } finally {
         setIsUploadingXlsx(false);
+        setUploadProgress({ current: 0, total: 0, step: '' });
         if (e.target) e.target.value = '';
       }
     };
-    reader.readAsBinaryString(file);
+    reader.onerror = () => {
+      alert("Erro ao ler o arquivo selecionado.");
+      setIsUploadingXlsx(false);
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   const handleAddRecord = async (e: React.FormEvent) => {
@@ -296,6 +324,58 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] font-sans text-[#3E2723] flex flex-col">
+      {/* Processing Overlay for Uploads */}
+      <AnimatePresence>
+        {isUploadingXlsx && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-[#3E2723]/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white p-8 rounded-[32px] shadow-2xl max-w-md w-full flex flex-col items-center gap-6 text-center"
+            >
+              <div className="relative">
+                <div className="absolute inset-0 bg-[#E67E22]/20 blur-xl rounded-full animate-pulse"></div>
+                <div className="bg-[#E67E22] p-6 rounded-full text-white relative">
+                  <FileSpreadsheet size={48} />
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="text-2xl font-serif font-bold text-[#2D5A27]">{uploadProgress.step}</h3>
+                <p className="text-sm text-[#5D4037] mt-2 font-medium">Isso pode levar alguns segundos dependendo do tamanho da planilha.</p>
+              </div>
+
+              {uploadProgress.total > 0 && (
+                <div className="w-full space-y-2">
+                  <div className="flex justify-between text-[10px] font-bold uppercase text-[#5D4037] tracking-widest">
+                    <span>Progresso</span>
+                    <span>{Math.round((uploadProgress.current / uploadProgress.total) * 100)}%</span>
+                  </div>
+                  <div className="w-full h-3 bg-[#D7CCC8]/30 rounded-full overflow-hidden border border-[#D7CCC8]/50">
+                    <motion.div 
+                      className="h-full bg-[#E67E22]"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                      transition={{ ease: "easeOut" }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-[#9E9E9E]">
+                    Processados {uploadProgress.current} de {uploadProgress.total} registros
+                  </p>
+                </div>
+              )}
+
+              <Loader2 className="animate-spin text-[#2D5A27] mt-2" size={32} />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="bg-[#2D5A27] text-white px-6 py-4 md:px-8 shadow-lg border-bottom border-b-4 border-[#E67E22] sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <motion.div 
@@ -674,7 +754,11 @@ export default function App() {
                  <input type="file" ref={fileInputRef} onChange={e => handleFileUpload(e, 'gall')} accept=".xlsx,.xls" className="hidden" />
               </div>
 
-              <div className="border-2 border-dashed border-white/20 rounded-2xl p-4 text-center bg-white/5 hover:bg-white/10 cursor-pointer transition-all flex flex-col items-center gap-2 group opacity-50">
+              <div 
+                onClick={() => alert("O Laboratório RAG de teses será habilitado em breve. No momento, use a importação de planilhas de árvores.")}
+                className="border-2 border-dashed border-white/20 rounded-2xl p-4 text-center bg-white/5 hover:bg-white/10 cursor-pointer transition-all flex flex-col items-center gap-2 group opacity-50"
+                title="Teses RAG Analysis (Em breve)"
+              >
                  <UploadCloud size={22} className="text-white" />
                  <p className="text-[7px] font-bold uppercase tracking-widest leading-none">Teses<br/>RAG Analysis</p>
               </div>
