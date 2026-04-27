@@ -14,7 +14,8 @@ async function startServer() {
   app.use(express.json());
 
   // Gemini API Initialization
-  const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || '');
+  const apiKey = process.env.USER_GEMINI_KEY || process.env.GEMINI_API_KEY || '';
+  const genAI = new GoogleGenAI(apiKey);
   
   const SYSTEM_INSTRUCTION = `Você é o "GeoBotânico-BH", um assistente de IA especializado em botânica e ecologia urbana em Belo Horizonte. Sua função é interagir com pesquisadores para analisar dados de árvores.
 
@@ -34,12 +35,16 @@ Restrições:
   // API Routes
   console.log("Setting up API routes...");
 
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", mode: process.env.NODE_ENV, hasKey: !!apiKey });
+  });
+
   app.post("/api/ask", async (req, res) => {
     console.log("Received /api/ask request");
     try {
-      if (!process.env.GEMINI_API_KEY) {
-        console.error("GEMINI_API_KEY is not defined in environment");
-        return res.status(500).json({ error: "Configuração de API ausente no servidor." });
+      if (!apiKey) {
+        console.error("No API key available");
+        return res.status(500).json({ error: "Configuração de API ausente no servidor. Por favor, adicione uma chave em Settings." });
       }
 
       const { query, contextData } = req.body;
