@@ -8,7 +8,7 @@ import {
   MapPin, Download, TreeDeciduous, 
   FileSearch, UploadCloud, Microscope, 
   Plus, LogIn, LogOut, Send, 
-  Loader2, CheckCircle2,
+  Loader2, CheckCircle2, List,
   BrainCircuit, Crosshair, FileSpreadsheet,
   Globe, X, Leaf, ChevronRight
 } from 'lucide-react';
@@ -190,6 +190,7 @@ export default function App() {
   const [items, setItems] = useState<TreeRecord[]>([]); // Research trees (Galls/Host)
   const [baseTrees, setBaseTrees] = useState<TreeRecord[]>([]); // Background BH trees (Grey)
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showLegend, setShowLegend] = useState(true);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
@@ -886,7 +887,7 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto w-full p-6 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1">
-        <div className="lg:col-span-8 flex flex-col gap-8">
+        <div className={`flex flex-col gap-8 transition-all duration-300 ${sidebarOpen ? 'lg:col-span-8' : 'lg:col-span-12'}`}>
           <AnimatePresence>
             {isAdding && (
               <motion.div 
@@ -1044,26 +1045,46 @@ export default function App() {
                 </MapContainer>
                 
                 {/* Legend Overlay */}
-                {!isUploadingXlsx && !showLoginModal && !showTemplateModal && !isAiLoading && (
+                {!isUploadingXlsx && !showLoginModal && !showTemplateModal && !isAiLoading && showLegend && (
                   <div className="absolute bottom-6 right-6 bg-white/95 backdrop-blur-sm p-5 rounded-2xl border border-[#D7CCC8] shadow-2xl w-60 z-[400] text-[#3E2723]">
-                    <p className="text-[11px] font-bold text-[#2D5A27] mb-4 uppercase tracking-[0.1em] flex items-center gap-2">
-                      <CheckCircle2 size={14} /> Monitoramento Urbano
-                    </p>
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-3 text-[10px] font-semibold text-[#5D4037]">
-                        <span className="w-3 h-3 bg-[#9E9E9E] rounded-full border border-gray-400"></span>
+                    <div className="flex justify-between items-center mb-4">
+                      <p className="text-[10px] font-bold text-[#2D5A27] uppercase tracking-[0.1em] flex items-center gap-2">
+                        <CheckCircle2 size={12} /> Monitoramento
+                      </p>
+                      <button 
+                        onClick={() => setShowLegend(false)}
+                        className="text-[#9E9E9E] hover:text-[#E67E22] transition-colors"
+                        title="Fechar Legenda"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-3 text-[10px] font-medium text-[#5D4037]">
+                        <span className="w-2.5 h-2.5 bg-[#9E9E9E] rounded-full border border-gray-400"></span>
                         População BH (Base)
                       </div>
-                      <div className="flex items-center gap-3 text-[10px] font-semibold text-[#2D5A27]">
-                        <span className="w-3 h-3 bg-[#2ecc71] rounded-full border border-[#27ae60]"></span>
-                        Hospedeiras de Pesquisa
+                      <div className="flex items-center gap-3 text-[10px] font-medium text-[#2D5A27]">
+                        <span className="w-2.5 h-2.5 bg-[#2ecc71] rounded-full border border-[#27ae60]"></span>
+                        Hospedeiras Pesquisa
                       </div>
-                      <div className="flex items-center gap-3 text-[10px] font-semibold text-[#E67E22]">
-                        <span className="w-3 h-3 bg-[#E67E22] rounded-full shadow-[0_0_8px_#E67E22]"></span>
+                      <div className="flex items-center gap-3 text-[10px] font-medium text-[#E67E22]">
+                        <span className="w-2.5 h-2.5 bg-[#E67E22] rounded-full shadow-[0_0_8px_#E67E22]"></span>
                         Presença de Galhas
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Legend Re-open Button */}
+                {!showLegend && (
+                  <button 
+                    onClick={() => setShowLegend(true)}
+                    className="absolute bottom-6 right-6 bg-white p-2.5 rounded-full border border-[#D7CCC8] shadow-lg z-[400] text-[#2D5A27] hover:scale-110 transition-transform"
+                    title="Ver Legenda"
+                  >
+                    <List size={20} />
+                  </button>
                 )}
 
                 {exporting && (
