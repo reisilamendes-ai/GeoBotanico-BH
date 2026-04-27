@@ -104,16 +104,21 @@ const StaticInventoryLayer = ({ trees }: { trees: TreeRecord[] }) => {
       _update: function() {
         const canvas = this._canvas;
         const size = map.getSize();
-        const origin = map.getPixelOrigin();
+        const dpr = window.devicePixelRatio || 1;
         
-        canvas.width = size.x;
-        canvas.height = size.y;
+        // Ajuste de resolução para evitar distorção em telas retina/high-res
+        canvas.width = size.x * dpr;
+        canvas.height = size.y * dpr;
+        canvas.style.width = size.x + 'px';
+        canvas.style.height = size.y + 'px';
         
         const topLeft = map.containerPointToLayerPoint([0, 0]);
         L.DomUtil.setPosition(canvas, topLeft);
 
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
+        
+        ctx.scale(dpr, dpr);
         
         const zoom = map.getZoom();
         // Escalonamento mais agressivo para que os pontos fiquem visíveis no zoom baixo e grandes no zoom alto
@@ -184,6 +189,7 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [items, setItems] = useState<TreeRecord[]>([]); // Research trees (Galls/Host)
   const [baseTrees, setBaseTrees] = useState<TreeRecord[]>([]); // Background BH trees (Grey)
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
@@ -194,17 +200,13 @@ export default function App() {
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [loginForm, setLoginForm] = useState({ nickname: '', password: '' });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [externalUrl, setExternalUrl] = useState(localStorage.getItem('galhas_inventory_url') || '');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const researchInputRef = useRef<HTMLInputElement>(null);
   const baseInputRef = useRef<HTMLInputElement>(null);
   // Carregamento automático de inventário persistente
   useEffect(() => {
-    const savedUrl = localStorage.getItem('galhas_inventory_url');
-    
-    const autoLoadFile = async (url: string) => {
+    const checkCache = async () => {
       try {
         setUploadProgress({ current: 0, total: 0, step: 'Verificando cache local...' });
         const cachedData = await idbGet('base_inventory_cache');
@@ -213,33 +215,8 @@ export default function App() {
           processLocalInventory(cachedData, false); // Don't re-save to IDB
           return;
         }
-
-        console.log("Tentando carregamento automático via URL:", url);
         
-        let targetUrl = url;
-        // Auto-fix for Google Sheets URLs
-        if (url.includes('docs.google.com/spreadsheets')) {
-          if (!url.includes('/export')) {
-            const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
-            if (match && match[1]) {
-              targetUrl = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
-              console.log("Convertendo link do Drive para exportação:", targetUrl);
-            }
-          }
-        }
-
-        const response = await fetch(targetUrl);
-        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        
-        const buffer = await response.arrayBuffer();
-        const wb = XLSX.read(buffer, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json(ws) as any[];
-        
-        if (data.length > 0) {
-           console.log(`Inventário persistente carregado: ${data.length} registros.`);
-           processLocalInventory(data, true); // Save to IDB
-        }
+        console.log("Nenhum inventário em cache encontrado no boot.");
       } catch (err) {
         console.error("Erro no carregamento automático:", err);
       } finally {
@@ -247,11 +224,7 @@ export default function App() {
       }
     };
 
-    if (savedUrl) {
-      autoLoadFile(savedUrl);
-    } else {
-      autoLoadFile('/inventory_bh.xlsx');
-    }
+    checkCache();
   }, []);
 
   const processLocalInventory = (data: any[], saveToCache = true) => {
@@ -434,22 +407,6 @@ export default function App() {
     } finally {
       setIsLoggingIn(false);
     }
-  };
-
-  const handleSaveSettings = () => {
-    let url = externalUrl.trim();
-    if (url.includes('docs.google.com/spreadsheets') && !url.includes('/export')) {
-      const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if (match && match[1]) {
-        url = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
-        setExternalUrl(url);
-      }
-    }
-    
-    localStorage.setItem('galhas_inventory_url', url);
-    setShowSettings(false);
-    alert("Configurações salvas. O inventário será recarregado automaticamente.");
-    window.location.reload();
   };
 
   const handleLogout = async () => {
@@ -841,63 +798,8 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-        {/* Settings Modal */}
-        <AnimatePresence>
-          {showSettings && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-[#3E2723]/80 backdrop-blur-md z-[250] flex items-center justify-center p-6"
-            >
-              <motion.div 
-                initial={{ scale: 0.9, y: 20 }}
-                animate={{ scale: 1, y: 0 }}
-                className="bg-white p-8 rounded-[32px] shadow-2xl max-w-sm w-full relative"
-              >
-                <button 
-                  onClick={() => setShowSettings(false)}
-                  className="absolute top-6 right-6 text-[#9E9E9E] hover:text-black"
-                >
-                  <X size={24} />
-                </button>
-                
-                <div className="mb-6">
-                  <div className="bg-[#5D4037] p-3 w-fit rounded-2xl text-white mb-4">
-                    <Globe size={24} />
-                  </div>
-                  <h3 className="text-xl font-serif font-bold text-[#2D5A27]">Link de Dados Externo</h3>
-                  <p className="text-xs text-[#5D4037] mt-1">Conecte sua planilha do Drive ou servidor.</p>
-                </div>
 
-                <div className="space-y-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#5D4037] ml-1">URL da Planilha (.xlsx ou .csv)</label>
-                    <input 
-                      type="url" 
-                      placeholder="https://docs.google.com/spreadsheets/d/.../export?format=xlsx"
-                      className="w-full bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl px-5 py-3 text-xs focus:border-[#2D5A27] focus:outline-none transition-all"
-                      value={externalUrl}
-                      onChange={e => setExternalUrl(e.target.value)}
-                    />
-                    <p className="text-[9px] text-[#7F8C8D] mt-1 italic">
-                      Dica: No Google Drive, use "Arquivo &rarr; Compartilhar &rarr; Publicar na Web" e escolha o link CSV/XLSX.
-                    </p>
-                  </div>
-
-                  <button 
-                    onClick={handleSaveSettings}
-                    className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-[#1B3A18] transition-all"
-                  >
-                    Salvar e Carregar
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {isUploadingXlsx && (
+      {isUploadingXlsx && (
           <AnimatePresence>
             <motion.div 
               initial={{ opacity: 0 }}
@@ -1055,7 +957,18 @@ export default function App() {
           </AnimatePresence>
 
           {/* Map View Section */}
-          <section className="flex flex-col gap-8 flex-1">
+          <section className="flex flex-col gap-8 flex-1 relative">
+            {/* Control to open sidebar if closed */}
+            {!sidebarOpen && (
+              <button 
+                onClick={() => setSidebarOpen(true)}
+                className="absolute top-6 right-6 z-[450] bg-[#2D5A27] text-white p-3 rounded-2xl shadow-2xl hover:scale-110 transition-all flex items-center gap-2 border-2 border-white"
+              >
+                <ChevronRight size={20} className="rotate-180" />
+                <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">Ver Índices</span>
+              </button>
+            )}
+
             <div className="natural-card overflow-hidden flex flex-col flex-1 min-h-[500px]">
               <div className="p-4 px-6 bg-[#F5F5F5] border-b border-[#D7CCC8] flex justify-between items-center">
                 <div className="flex items-center gap-3 font-bold text-[#5D4037] text-sm">
@@ -1194,8 +1107,24 @@ export default function App() {
         </div>
 
         {/* Sidebar Section */}
-        <aside className="lg:col-span-4 flex flex-col gap-6">
-          {/* AI Analysis Interface Integrated to Sidebar as a Lab Card */}
+        <AnimatePresence>
+          {sidebarOpen && (
+            <motion.aside 
+              initial={{ x: 400, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 400, opacity: 0 }}
+              className="lg:col-span-4 flex flex-col gap-6 w-full lg:w-[400px] bg-white border-l border-[#D7CCC8]/40 p-6 overflow-y-auto overflow-x-hidden relative custom-scrollbar"
+            >
+              {/* Force Toggle Button inside Sidebar */}
+              <button 
+                onClick={() => setSidebarOpen(false)}
+                className="absolute top-6 right-6 text-[#9E9E9E] hover:text-[#2D5A27] transition-colors p-1"
+                title="Recolher Painel"
+              >
+                <X size={20} />
+              </button>
+
+              {/* AI Analysis Interface Integrated to Sidebar as a Lab Card */}
           <div className="natural-card p-6 flex flex-col gap-4 bg-[#F5F5F5]/30">
             <div className="flex items-center gap-2 text-[#2D5A27]">
               <BrainCircuit className="text-[#E67E22]" size={20} />
@@ -1298,12 +1227,6 @@ export default function App() {
                <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#BCAAA4]">Integração Labs</h4>
                <div className="flex gap-3">
                 <button 
-                  onClick={() => setShowSettings(true)}
-                  className="text-[10px] font-bold text-[#ecf0f1] hover:underline flex items-center gap-1"
-                >
-                  <Globe size={12} /> Config. Link
-                </button>
-                <button 
                   onClick={() => setShowTemplateModal(true)}
                   className="text-[10px] font-bold text-[#E67E22] hover:underline flex items-center gap-1"
                 >
@@ -1357,7 +1280,9 @@ export default function App() {
               </div>
             </div>
           </div>
-        </aside>
+          </motion.aside>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* Status Footer */}
