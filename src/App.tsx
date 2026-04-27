@@ -230,24 +230,46 @@ export default function App() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'research' | 'base' | 'gall') => {
     const file = e.target.files?.[0];
-    if (!file || !user) return;
+    console.log("File upload started:", file?.name, "Type:", type);
+    
+    if (!file) {
+      console.log("No file selected");
+      return;
+    }
+    if (!user) {
+      console.log("User not logged in");
+      alert("Por favor, faça login para realizar o upload de dados.");
+      return;
+    }
 
     setIsUploadingXlsx(true);
     setUploadProgress({ current: 0, total: 0, step: 'Lendo arquivo...' });
 
-        const reader = new FileReader();
+    const reader = new FileReader();
     reader.onload = async (evt) => {
+      console.log("File reader onload triggered");
       try {
+        const fileExt = file.name.split('.').pop()?.toLowerCase();
         const dataBuffer = evt.target?.result as ArrayBuffer;
-        const wb = XLSX.read(dataBuffer, { type: 'array' });
+        
+        let wb;
+        if (fileExt === 'csv') {
+          console.log("Processing as CSV");
+          wb = XLSX.read(dataBuffer, { type: 'array', codepage: 65001 }); // UTF-8
+        } else {
+          console.log("Processing as Binary Spreadsheet");
+          wb = XLSX.read(dataBuffer, { type: 'array' });
+        }
+        
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws) as any[];
-        console.log("XLSX Data sample:", data[0]);
-        console.log("XLSX Headers detected:", Object.keys(data[0] || {}));
-
+        
+        // Convert to JSON with raw headers if CSV to avoid delimiter issues
+        const data = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
+        console.log("Parsed records count:", data.length);
+        
         if (!data || data.length === 0) {
-          throw new Error("A planilha parece estar vazia.");
+          throw new Error("A planilha parece estar vazia ou o formato não foi reconhecido.");
         }
 
         const totalItems = data.length;
@@ -532,6 +554,15 @@ export default function App() {
               </div>
 
               <div className="bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl overflow-hidden mb-6">
+              <div className="space-y-4">
+                <div className="bg-[#D7CCC8]/20 p-3 text-[10px] font-bold uppercase tracking-wider text-[#5D4037] border-b border-[#D7CCC8]/30">
+                  Formato CSV Recomendado
+                </div>
+                <div className="p-4 bg-gray-50 rounded-lg font-mono text-[10px] text-[#3E2723] overflow-x-auto">
+                  especie,latitude,longitude,regiao<br/>
+                  Sibipiruna,-19.9213,-43.9412,Centro<br/>
+                  Ipê Amarelo,-19.9345,-43.9102,Savassi
+                </div>
                 <div className="bg-[#D7CCC8]/20 p-3 text-[10px] font-bold uppercase tracking-wider text-[#5D4037] border-b border-[#D7CCC8]/30">
                   Colunas Essenciais (Detectadas Automaticamente)
                 </div>
@@ -546,12 +577,13 @@ export default function App() {
                   </div>
                 </div>
               </div>
+              </div>
 
               <div className="space-y-3">
                 <p className="text-xs text-[#5D4037] leading-relaxed">
                   • <strong>Dica de Ouro:</strong> O sistema armazenará <strong>todas</strong> as outras colunas da sua planilha (ex: DAP, altura, estado fitossanitário) como metadados extras.<br/>
                   • <strong>Liberdade:</strong> Não se preocupe se não tiver <i>região</i> ou <i>bairro</i>; o sistema processará o que encontrar!<br/>
-                  • <strong>Formato:</strong> Use arquivos .XLSX ou .XLS.
+                  • <strong>Formato:</strong> Use arquivos .XLSX, .XLS ou .CSV (separado por vírgula ou ponto e vírgula).
                 </p>
                 <button 
                   onClick={() => setShowTemplateModal(false)}
@@ -995,7 +1027,7 @@ export default function App() {
               >
                  <TreeDeciduous size={22} className="text-[#9E9E9E]" />
                  <p className="text-[7px] font-bold uppercase tracking-widest leading-none">Povoamento Base<br/>(Cinza)</p>
-                 <input type="file" ref={baseInputRef} onChange={e => handleFileUpload(e, 'base')} accept=".xlsx,.xls" className="hidden" />
+                 <input type="file" ref={baseInputRef} onChange={e => handleFileUpload(e, 'base')} accept=".xlsx,.xls,.csv" className="hidden" />
               </div>
 
               <div 
@@ -1005,7 +1037,7 @@ export default function App() {
               >
                  <Microscope size={22} className="text-[#2ecc71]" />
                  <p className="text-[7px] font-bold uppercase tracking-widest leading-none">Hospedeiras<br/>(Verde)</p>
-                 <input type="file" ref={researchInputRef} onChange={e => handleFileUpload(e, 'research')} accept=".xlsx,.xls" className="hidden" />
+                 <input type="file" ref={researchInputRef} onChange={e => handleFileUpload(e, 'research')} accept=".xlsx,.xls,.csv" className="hidden" />
               </div>
 
               <div 
@@ -1015,7 +1047,7 @@ export default function App() {
               >
                  <BrainCircuit size={22} className="text-[#E67E22]" />
                  <p className="text-[7px] font-bold uppercase tracking-widest leading-none">Galhas<br/>(Laranja)</p>
-                 <input type="file" ref={fileInputRef} onChange={e => handleFileUpload(e, 'gall')} accept=".xlsx,.xls" className="hidden" />
+                 <input type="file" ref={fileInputRef} onChange={e => handleFileUpload(e, 'gall')} accept=".xlsx,.xls,.csv" className="hidden" />
               </div>
 
               <div 
