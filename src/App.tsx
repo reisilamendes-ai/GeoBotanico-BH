@@ -69,7 +69,7 @@ function ChangeView({ center }: { center: [number, number] }) {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [items, setItems] = useState<TreeRecord[]>([]); // Research trees (Galls/Host)
   const [baseTrees, setBaseTrees] = useState<TreeRecord[]>([]); // Background BH trees (Grey)
   const [loading, setLoading] = useState(true);
@@ -77,10 +77,12 @@ export default function App() {
   const [isLocating, setIsLocating] = useState(false);
   const [isUploadingXlsx, setIsUploadingXlsx] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, step: '' });
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [loginForm, setLoginForm] = useState({ nickname: '', password: '' });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const researchInputRef = useRef<HTMLInputElement>(null);
   const baseInputRef = useRef<HTMLInputElement>(null);
-  
+
   // AI State
   const [chatInput, setChatInput] = useState('');
   const [aiResponse, setAiResponse] = useState<string | null>(null);
@@ -93,13 +95,53 @@ export default function App() {
   const [newLng, setNewLng] = useState(-43.941);
   const [newRegion, setNewRegion] = useState('Centro-Sul');
 
+  // Pre-established users for testing
+  const TEST_USERS: Record<string, string> = {
+    'Isabela_Evelyn': 'galhas123',
+    'Luisa_Eduarda': 'galhas123',
+    'Ricardo_Ribeiro': 'galhas123',
+    'Reisila_Mendes': 'galhas123'
+  };
+
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    // Check for saved test user
+    const savedUser = localStorage.getItem('geo_botanico_user');
+    if (savedUser) {
+      setUser(JSON.parse(savedUser));
       setLoading(false);
-    });
-    return () => unsubscribeAuth();
+    } else {
+      const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+        if (u) setUser(u);
+        setLoading(false);
+      });
+      return () => unsubscribeAuth();
+    }
   }, []);
+
+  const handleTestLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const { nickname, password } = loginForm;
+    
+    if (TEST_USERS[nickname] === password) {
+      const mockUser = {
+        uid: `test_${nickname.toLowerCase()}`,
+        displayName: nickname.replace('_', ' '),
+        email: `${nickname.toLowerCase()}@test.com`,
+        isTestUser: true
+      };
+      setUser(mockUser);
+      localStorage.setItem('geo_botanico_user', JSON.stringify(mockUser));
+      setShowLoginModal(false);
+    } else {
+      alert("Usuário ou senha inválidos para este ambiente de teste.");
+    }
+  };
+
+  const handleLogout = async () => {
+    localStorage.removeItem('geo_botanico_user');
+    await auth.signOut();
+    setUser(null);
+  };
 
   useEffect(() => {
     if (!user) {
@@ -140,16 +182,6 @@ export default function App() {
       unsubscribeBase();
     };
   }, [user]);
-
-  const handleLogin = async () => {
-    try {
-      await signInWithPopup(auth, new GoogleAuthProvider());
-    } catch (error) {
-      console.error("Login failed:", error);
-    }
-  };
-
-  const handleLogout = () => signOut(auth);
 
   const getCurrentLocation = () => {
     if (!navigator.geolocation) {
@@ -329,7 +361,71 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] font-sans text-[#3E2723] flex flex-col">
-      {/* Processing Overlay for Uploads */}
+      {/* Login Modal for Test Users */}
+      <AnimatePresence>
+        {showLoginModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-[#3E2723]/80 backdrop-blur-md z-[210] flex items-center justify-center p-6"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              className="bg-white p-8 rounded-[32px] shadow-2xl max-w-sm w-full relative"
+            >
+              <button 
+                onClick={() => setShowLoginModal(false)}
+                className="absolute top-6 right-6 text-[#9E9E9E] hover:text-black"
+              >
+                <X size={24} />
+              </button>
+
+              <div className="flex flex-col items-center gap-6 mb-8">
+                <div className="bg-[#2D5A27] p-4 rounded-3xl text-white shadow-lg">
+                  <Leaf size={32} />
+                </div>
+                <div className="text-center">
+                  <h2 className="text-2xl font-serif font-bold text-[#2D5A27]">Acesso de Teste</h2>
+                  <p className="text-sm text-[#5D4037] mt-1">Identifique-se para começar a pesquisa</p>
+                </div>
+              </div>
+
+              <form onSubmit={handleTestLogin} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-[#5D4037] ml-1">Apelido</label>
+                  <input 
+                    type="text" 
+                    required
+                    placeholder="Isabela_Evelyn..."
+                    className="w-full bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl px-5 py-3 text-sm focus:border-[#2D5A27] focus:outline-none transition-all"
+                    value={loginForm.nickname}
+                    onChange={e => setLoginForm({...loginForm, nickname: e.target.value})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-[#5D4037] ml-1">Senha</label>
+                  <input 
+                    type="password" 
+                    required
+                    placeholder="••••••••"
+                    className="w-full bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl px-5 py-3 text-sm focus:border-[#2D5A27] focus:outline-none transition-all"
+                    value={loginForm.password}
+                    onChange={e => setLoginForm({...loginForm, password: e.target.value})}
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-2xl hover:bg-[#1B3A18] transition-all flex items-center justify-center gap-3 mt-4"
+                >
+                  Acessar Sistema <ChevronRight size={20} />
+                </button>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {isUploadingXlsx && (
           <motion.div 
@@ -401,7 +497,9 @@ export default function App() {
             {user ? (
               <div className="flex items-center gap-4">
                 <div className="hidden lg:block text-right">
-                  <p className="text-[10px] text-[#E8F5E9] uppercase tracking-wider font-sans opacity-80">Pesquisador logado</p>
+                  <p className="text-[10px] text-[#E8F5E9] uppercase tracking-wider font-sans opacity-80">
+                    {user.isTestUser ? 'Acesso Especial' : 'Pesquisador Logado'}
+                  </p>
                   <p className="text-sm font-bold text-white">{user.displayName}</p>
                 </div>
                 <button 
@@ -419,12 +517,20 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <button 
-                onClick={handleLogin}
-                className="bg-[#E67E22] hover:bg-[#D35400] text-white px-6 py-2.5 rounded-full font-bold transition-all shadow-[0_4px_0_#D35400] active:translate-y-0.5 active:shadow-none flex items-center gap-2"
-              >
-                <LogIn size={20} /> Entrar
-              </button>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setShowLoginModal(true)}
+                  className="bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-xl font-bold text-xs transition-all border border-white/20"
+                >
+                  Login Teste
+                </button>
+                <button 
+                  onClick={() => signInWithPopup(auth, googleProvider)}
+                  className="bg-[#E67E22] text-white px-4 py-2 rounded-xl font-bold text-xs shadow-md hover:bg-[#D35400] transition-all flex items-center gap-2"
+                >
+                  <Globe size={14} /> Google
+                </button>
+              </div>
             )}
           </div>
         </div>
