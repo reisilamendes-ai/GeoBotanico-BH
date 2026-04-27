@@ -15,14 +15,19 @@ Restrições:
 - Não invente dados.
 - Peça detalhes morfológicos se houver incerteza.`;
 
-// The platform provides process.env.GEMINI_API_KEY in the preview environment.
+// Configuração da chave de API
+// No AI Studio (Preview), usamos process.env.USER_GEMINI_KEY
+// No Vercel/Produção, usamos import.meta.env.VITE_USER_GEMINI_KEY
+const getApiKey = () => {
+  const viteKey = (import.meta as any).env?.VITE_USER_GEMINI_KEY;
+  const processKey = typeof process !== "undefined" ? process.env?.USER_GEMINI_KEY : null;
+  const fallbackKey = typeof process !== "undefined" ? process.env?.GEMINI_API_KEY : null;
+  
+  return viteKey || processKey || fallbackKey || "";
+};
+
 const ai = new GoogleGenAI({ 
-  apiKey: 
-    process.env.USER_GEMINI_KEY || 
-    process.env.GEMINI_API_KEY || 
-    (import.meta as any).env?.VITE_USER_GEMINI_KEY ||
-    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
-    "" 
+  apiKey: getApiKey()
 });
 
 export async function askGeoBotanico(query: string, contextData: any[]) {
