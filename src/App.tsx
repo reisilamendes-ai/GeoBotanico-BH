@@ -149,52 +149,61 @@ export default function App() {
     e.preventDefault();
     const { nickname, password } = loginForm;
     
-    const userKey = Object.keys(TEST_USERS).find(
-      k => k.toLowerCase() === nickname.toLowerCase()
-    );
-
-    if (!userKey || TEST_USERS[userKey] !== password) {
-      alert("Usuário ou senha inválidos para este ambiente de teste.");
+    if (nickname.length < 3) {
+      alert("O apelido deve ter pelo menos 3 caracteres.");
+      return;
+    }
+    if (password.length < 6) {
+      alert("A senha deve ter pelo menos 6 caracteres.");
       return;
     }
 
     setIsLoggingIn(true);
-    // Use the matched userKey for consistent display and naming
-    const email = `${userKey.toLowerCase().replace(/\s+/g, '_')}@galhas.app.test`;
+    // Normalize nickname: remove spaces and special chars for the email part
+    const normalizedNick = nickname.toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
+    const email = `${normalizedNick}@galhas.app.test`;
     
     try {
-      console.log("Attempting Test Login for:", email);
+      console.log("Tentando Login de Teste:", email);
       try {
         await signInWithEmailAndPassword(auth, email, password);
-        console.log("Test Login (Email) Success");
+        console.log("Login realizado com sucesso.");
       } catch (err: any) {
-        console.warn("Email login failed, checking if creation is needed:", err.code);
-        // If provider is disabled or user not found, we might need another approach
-        if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.message.includes('INVALID_LOGIN_CREDENTIALS')) {
+        console.warn("Falha no login direto, verificando necessidade de registro:", err.code);
+        
+        if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.message.includes('INVALID_LOGIN_CREDENTIALS')) {
+          // If it's a wrong password for a standard test user, we should probably warn
+          const standardUser = Object.keys(TEST_USERS).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '_') === normalizedNick);
+          if (standardUser && TEST_USERS[standardUser] !== password) {
+             alert("Senha incorreta para este usuário de teste pré-cadastrado.");
+             setIsLoggingIn(false);
+             return;
+          }
+
           try {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password);
             await updateProfile(userCredential.user, {
-              displayName: userKey.replace('_', ' ')
+              displayName: nickname.trim()
             });
-            console.log("Test User created and logged in");
+            console.log("Novo usuário de teste criado.");
           } catch (createErr: any) {
-            console.error("Failed to create test user:", createErr);
-            // If email provider is disabled, fall back to Anonymous + Custom Data if possible
+            if (createErr.code === 'auth/email-already-in-use') {
+              throw new Error("Senha incorreta para este apelido.");
+            }
             if (createErr.code === 'auth/operation-not-allowed') {
-              console.log("Email provider disabled, falling back to Anonymous Login for test user");
+              console.log("Provedor de email desativado, usando login anônimo com perfil.");
               const anonResult = await signInAnonymously(auth);
               await updateProfile(anonResult.user, {
-                displayName: userKey.replace('_', ' ')
+                displayName: nickname.trim()
               });
             } else {
               throw createErr;
             }
           }
         } else if (err.code === 'auth/operation-not-allowed') {
-          console.log("Email provider disabled, falling back to Anonymous Login for test user");
           const anonResult = await signInAnonymously(auth);
           await updateProfile(anonResult.user, {
-            displayName: userKey.replace('_', ' ')
+            displayName: nickname.trim()
           });
         } else {
           throw err;
@@ -203,8 +212,8 @@ export default function App() {
       setShowLoginModal(false);
       setLoginForm({ nickname: '', password: '' });
     } catch (error: any) {
-      console.error("Test Login Final Error:", error);
-      alert(`Erro no login de teste: ${error.message}`);
+      console.error("Erro Final de Login:", error);
+      alert(`Erro no acesso: ${error.message}`);
     } finally {
       setIsLoggingIn(false);
     }
@@ -566,8 +575,8 @@ export default function App() {
                   <Leaf size={32} />
                 </div>
                 <div className="text-center">
-                  <h2 className="text-2xl font-serif font-bold text-[#2D5A27]">Acesso de Teste</h2>
-                  <p className="text-sm text-[#5D4037] mt-1">Identifique-se para começar a pesquisa</p>
+                  <h2 className="text-2xl font-serif font-bold text-[#2D5A27]">Login / Registro</h2>
+                  <p className="text-sm text-[#5D4037] mt-1">Acesse com sua conta ou crie um apelido</p>
                 </div>
               </div>
 
@@ -604,7 +613,7 @@ export default function App() {
 
                 <div className="mt-2 text-center">
                   <p className="text-[10px] text-[#9E9E9E] font-medium">
-                    Sugestão de teste: Reisila_Mendes (senha: galhas123)
+                    Sugestão: Novos usuários podem usar qualquer apelido e senha (min. 6 caracteres).
                   </p>
                 </div>
 
