@@ -243,7 +243,7 @@ export default function App() {
     setIsUploadingXlsx(true);
     setUploadProgress({ current: 0, total: 0, step: 'Lendo arquivo...' });
 
-    const reader = new FileReader();
+        const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
         const dataBuffer = evt.target?.result as ArrayBuffer;
@@ -259,6 +259,27 @@ export default function App() {
         const totalItems = data.length;
         setUploadProgress({ current: 0, total: totalItems, step: 'Processando registros...' });
 
+        // Helper to find column case-insensitively and ignoring spaces
+        const getRowVal = (row: any, aliases: string[]) => {
+          const keys = Object.keys(row);
+          const foundKey = keys.find(k => {
+            const normalizedK = k.toLowerCase().replace(/[\s_.-]/g, '');
+            return aliases.some(alias => normalizedK === alias.toLowerCase().replace(/[\s_.-]/g, ''));
+          });
+          return foundKey ? row[foundKey] : undefined;
+        };
+
+        const parseCoord = (val: any) => {
+          if (val === undefined || val === null) return NaN;
+          if (typeof val === 'number') return val;
+          if (typeof val === 'string') {
+            const normalized = val.replace(',', '.').trim();
+            const num = parseFloat(normalized);
+            return isNaN(num) ? NaN : num;
+          }
+          return NaN;
+        };
+
         const collectionPath = type === 'base' ? 'base_trees' : 'tree_records';
         
         // Firestore batches are limited to 500 operations.
@@ -272,10 +293,17 @@ export default function App() {
           let itemsInBatch = 0;
 
           chunk.forEach((row) => {
-            const species = (row.species || row.especie || row.Especie || row.NOME_CIENTIFICO || row.Nome || row.Taxon || row.Arvore || 'Não identificado').slice(0, 190);
-            const lat = Number(row.lat || row.latitude || row.LATITUDE || row.Lat || row.Y || row.CoordY || row.Ponto_Y);
-            const lng = Number(row.lng || row.long || row.longitude || row.LONGITUDE || row.Long || row.X || row.CoordX || row.Ponto_X);
-            const region = row.region || row.regiao || row.Regiao || row.BAIRRO || row.Local || row.Distrito || 'BH';
+            const speciesVal = getRowVal(row, ['species', 'especie', 'nome', 'taxon', 'arvore', 'nomecientifico']);
+            const species = (typeof speciesVal === 'string' ? speciesVal : 'Não identificado').slice(0, 190);
+            
+            const latVal = getRowVal(row, ['lat', 'latitude', 'y', 'coordy', 'pontoy']);
+            const lngVal = getRowVal(row, ['lng', 'long', 'longitude', 'x', 'coordx', 'pontox']);
+            
+            const lat = parseCoord(latVal);
+            const lng = parseCoord(lngVal);
+            
+            const regionVal = getRowVal(row, ['region', 'regiao', 'bairro', 'local', 'distrito']);
+            const region = regionVal || 'BH';
 
             if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
               const docRef = doc(collection(db, collectionPath));
@@ -287,8 +315,16 @@ export default function App() {
 
               // Identify extra columns to preserve "spreadsheet format"
               const extraData: Record<string, any> = {};
+              const processedKeys = [
+                'species', 'especie', 'nome', 'taxon', 'arvore', 'nomecientifico',
+                'lat', 'latitude', 'y', 'coordy', 'pontoy',
+                'lng', 'long', 'longitude', 'x', 'coordx', 'pontox',
+                'region', 'regiao', 'bairro', 'local', 'distrito', 'tags'
+              ];
+              
               Object.keys(row).forEach(key => {
-                if (!['species', 'especie', 'lat', 'lng', 'latitude', 'longitude', 'region', 'regiao', 'tags'].includes(key.toLowerCase())) {
+                const normalizedK = key.toLowerCase().replace(/[\s_.-]/g, '');
+                if (!processedKeys.includes(normalizedK)) {
                   extraData[key] = row[key];
                 }
               });
@@ -320,7 +356,8 @@ export default function App() {
         if (successfulCount > 0) {
           alert(`Sucesso! ${successfulCount} registros importados na categoria: ${type}.`);
         } else {
-          alert("Aviso: Nenhum registro válido encontrado. Verifique se as colunas de Latitude e Longitude existem e possuem números válidos (ex: lat, long, latitude, longitude, X, Y).");
+          const headers = Object.keys(data[0] || {}).join(', ');
+          alert(`Aviso: Nenhum registro válido encontrado. \n\nDetectamos estas colunas na sua planilha: [${headers}]. \n\nVerifique se as colunas de Latitude e Longitude possuem números válidos (ex: lat, long, latitude, longitude, X, Y). Se você usa vírgula como separador decimal, o sistema tentará converter automaticamente.`);
         }
       } catch (error: any) {
         console.error("Error importing XLSX:", error);
