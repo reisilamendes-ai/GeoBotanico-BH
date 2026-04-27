@@ -113,18 +113,24 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
       if (u) {
         setUser(u);
+        setLoading(false);
       } else {
-        // ACESSO TEMPORÁRIO PARA CONFIGURAÇÃO (SEM LOGIN)
-        setUser({
-          uid: 'dev_guest_id',
-          displayName: 'Acesso Técnico (Convidado)',
-          email: 'admin@debug.mode'
-        } as User);
+        try {
+          const anonResult = await signInAnonymously(auth);
+          await updateProfile(anonResult.user, {
+            displayName: 'Acesso Técnico'
+          });
+          setUser(anonResult.user);
+        } catch (err) {
+          console.error("Falha no login anônimo técnico:", err);
+          setUser({ uid: 'guest', displayName: 'Convidado' } as User);
+        } finally {
+          setLoading(false);
+        }
       }
-      setLoading(false);
     });
     return () => unsubscribeAuth();
   }, []);
@@ -466,11 +472,16 @@ export default function App() {
             try {
               await commitWithRetry(batch);
               successfulCount += itemsInBatch;
-              // Throttle para evitar limites de escrita do Firestore
               await new Promise(r => setTimeout(r, 100)); 
-            } catch (err) {
+            } catch (err: any) {
               console.error(`Falha crítica no lote começando em ${i}:`, err);
               errorCount += itemsInBatch;
+              // Se o primeiro lote falhar, para e avisa o usuário (evita spam de erros)
+              if (i === 0) {
+                alert(`Erro ao enviar o primeiro lote de dados: ${err.message}\n\nO processamento foi interrompido.`);
+                setIsUploadingXlsx(false);
+                return;
+              }
             }
           }
         }

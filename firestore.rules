@@ -14,10 +14,10 @@ service cloud.firestore {
     function existing() { return resource.data; }
     
     function isAdmin() { 
-      return isSignedIn() && (
+      return (isSignedIn() && (
         request.auth.token.email == 'reisilamendes@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
+      ));
     }
 
     // Validation Helpers
@@ -37,7 +37,7 @@ service cloud.firestore {
 
     match /tree_records/{treeId} {
       allow read: if true;
-      allow create: if isSignedIn() && isValidId(treeId) && isValidTreeRecord(incoming());
+      allow create: if isSignedIn() && isValidTreeRecord(incoming());
       allow update: if isSignedIn() && (
         isAdmin() || (
           existing().researcherId == request.auth.uid &&
@@ -45,13 +45,13 @@ service cloud.firestore {
           incoming().researcherId == existing().researcherId
         )
       );
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || (isSignedIn() && existing().researcherId == request.auth.uid);
     }
 
     match /base_trees/{treeId} {
       allow read: if true;
-      allow create: if isSignedIn() && isValidId(treeId) && isValidTreeRecord(incoming());
-      allow update, delete: if isAdmin();
+      allow create: if isSignedIn() && isValidTreeRecord(incoming());
+      allow update, delete: if isAdmin() || (isSignedIn() && existing().researcherId == request.auth.uid);
     }
 
     match /scientific_papers/{paperId} {
