@@ -92,16 +92,14 @@ const StaticInventoryLayer = ({ trees }: { trees: TreeRecord[] }) => {
         canvas.style.pointerEvents = 'none';
         this._canvas = canvas;
         pane?.appendChild(canvas);
-        map.on('viewreset', this._update, this);
-        map.on('zoom', this._update, this);
         map.on('moveend', this._update, this);
+        map.on('zoomend', this._update, this);
         this._update();
       },
       onRemove: function(map: L.Map) {
         L.DomUtil.remove(this._canvas);
-        map.off('viewreset', this._update, this);
-        map.off('zoom', this._update, this);
         map.off('moveend', this._update, this);
+        map.off('zoomend', this._update, this);
       },
       _update: function() {
         const canvas = this._canvas;
@@ -320,16 +318,26 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
       if (u) {
         setUser(u);
       } else {
-        // LOGIN DESATIVADO: Sempre logado como o pesquisador principal ou convidado
-        setUser({
-          uid: 'pesquisador_principal',
-          displayName: 'Pesquisador Principal',
-          email: 'pesquisa@galhas.app'
-        } as User);
+        // Transparent login to allow Firestore writes
+        try {
+          const cred = await signInAnonymously(auth);
+          setUser({
+            ...cred.user,
+            displayName: 'Pesquisador Local',
+            email: 'anon@pesquisa.app'
+          } as User);
+        } catch (e) {
+          console.error("Auth error", e);
+          setUser({
+            uid: 'pesquisador_principal',
+            displayName: 'Pesquisador Principal',
+            email: 'pesquisa@galhas.app'
+          } as User);
+        }
       }
       setLoading(false);
     });
@@ -361,18 +369,11 @@ export default function App() {
     }
   };
 
-  const handleTestLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const { nickname, password } = loginForm;
-    
-    if (nickname.length < 3) {
-      alert("O apelido deve ter pelo menos 3 caracteres.");
-      return;
-    }
-    if (password.length < 6) {
-      alert("A senha deve ter pelo menos 6 caracteres.");
-      return;
-    }
+  const handleTestLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    // For convenience, always use the test account
+    const nickname = "Pesquisador";
+    const password = "password123";
 
     setIsLoggingIn(true);
     // Normalize nickname: remove spaces and special chars for the email part
@@ -453,7 +454,6 @@ export default function App() {
 
   const handleLogout = async () => {
     await signOut(auth);
-    setUser(null);
   };
 
   useEffect(() => {
@@ -463,7 +463,8 @@ export default function App() {
       return;
     }
 
-    const q = query(collection(db, 'tree_records'), orderBy('createdAt', 'desc'));
+    // Records (Galls/Research) stay in the cloud
+    const q = query(collection(db, 'tree_records'), orderBy('createdAt', 'desc'), limit(5000));
     const unsubscribeFirestore = onSnapshot(q, (snapshot) => {
       const records = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -474,31 +475,11 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, 'tree_records');
     });
 
-    // Aumentamos o teto para permitir visualizar mais dados da nuvem simultaneamente.
-    const bq = query(collection(db, 'base_trees'), limit(30000));
-    const unsubscribeBase = onSnapshot(bq, (snapshot) => {
-      const records = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as TreeRecord[];
-      console.log(`Loaded ${records.length} base units from cloud`);
-      setBaseTrees(prev => {
-        // Mantemos os dados locais e concatenamos com os da nuvem (evitando duplicatas se o ID for igual)
-        const localOnly = prev.filter(p => p.id.startsWith('local-'));
-        const cloudIds = new Set(records.map(r => r.id));
-        const filteredLocal = localOnly.filter(p => !cloudIds.has(p.id));
-        return [...filteredLocal, ...records];
-      });
-    }, (error) => {
-      console.error("Base trees load error:", error);
-      if (error.message.includes("permission-denied")) {
-        console.warn("Permissão negada para carregar base_trees. Isso é esperado se não estiver logado.");
-      }
-    });
+    // WE REMOVED THE base_trees Firestore fetch to save quota.
+    // The "base trees" are now handled strictly via CSV/XLSX local loading + IndexedDB cache.
 
     return () => {
       unsubscribeFirestore();
-      unsubscribeBase();
     };
   }, [user]);
 
@@ -1110,17 +1091,23 @@ export default function App() {
       {/* Layer 1: Base Population (Static Canvas Layer) */}
       <StaticInventoryLayer trees={baseTrees} />
 
-      {/* Layer 2: Research/Host (Green) & Galls (Orange) */}
+                  {/* Layer 2: Research/Host (Green) & Galls (Orange) */}
                   {items.map((tree) => {
                     const tags = tree.tags || [];
                     const isGall = tags.includes('Galha');
                     const isHost = tags.includes('Hospedeira');
                     
                     return (
-                      <Marker 
+                      <CircleMarker 
                         key={tree.id} 
-                        position={[tree.location?.lat || 0, tree.location?.lng || 0]}
-                        icon={isGall ? gallIcon : isHost ? treeIcon : L.Icon.Default.prototype}
+                        center={[tree.location?.lat || 0, tree.location?.lng || 0]}
+                        radius={8}
+                        pathOptions={{
+                          fillColor: isGall ? '#E67E22' : '#2D5A27',
+                          color: 'white',
+                          weight: 2,
+                          fillOpacity: 0.9
+                        }}
                       >
                         <Popup className="font-sans">
                           <div className="p-2">
@@ -1138,7 +1125,7 @@ export default function App() {
                             <p className="text-[9px] mt-2 opacity-50 italic">Coleta: {tree.researcherName}</p>
                           </div>
                         </Popup>
-                      </Marker>
+                      </CircleMarker>
                     );
                   })}
                 </MapContainer>
