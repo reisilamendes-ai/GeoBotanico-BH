@@ -20,7 +20,7 @@ Restrições:
 export async function askGeoBotanico(query: string, contextData: any[]) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-flash-latest",
       contents: `Aqui estão os dados atuais do banco: ${JSON.stringify(contextData)}.
 Pergunta do pesquisador: '${query}'`,
       config: {
@@ -38,7 +38,7 @@ Pergunta do pesquisador: '${query}'`,
 export async function analyzeScientificPaper(query: string, paperText: string) {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-flash-latest",
       contents: `Com base no seguinte texto científico:
 ---
 ${paperText}
