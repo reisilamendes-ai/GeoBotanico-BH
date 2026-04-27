@@ -9,7 +9,8 @@ import {
   FileSearch, UploadCloud, Microscope, 
   Plus, LogIn, LogOut, Send, 
   Loader2, CheckCircle2,
-  BrainCircuit, Crosshair, FileSpreadsheet
+  BrainCircuit, Crosshair, FileSpreadsheet,
+  Globe, X, Leaf, ChevronRight
 } from 'lucide-react';
 import { 
   collection, addDoc, onSnapshot, 
