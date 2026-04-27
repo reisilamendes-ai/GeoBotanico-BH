@@ -1,11 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
 
-// Initialize the Gemini API client
-// The platform provides GEMINI_API_KEY in the environment.
-const ai = new GoogleGenAI({ 
-  apiKey: process.env.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_KEY || ""
-});
-
 const SYSTEM_INSTRUCTION = `Você é o "GeoBotânico-BH", um assistente de IA especializado em botânica e ecologia urbana em Belo Horizonte. Sua função é interagir com pesquisadores para analisar dados de árvores.
 
 Contexto de Dados: Você receberá entradas que contêm Coordenadas, Tags (Nativa, Exótica, Hospedeira de galha, etc) e Metadados.
@@ -21,21 +15,32 @@ Restrições:
 - Não invente dados.
 - Peça detalhes morfológicos se houver incerteza.`;
 
+// The platform provides process.env.GEMINI_API_KEY in the preview environment.
+const ai = new GoogleGenAI({ 
+  apiKey: 
+    process.env.USER_GEMINI_KEY || 
+    process.env.GEMINI_API_KEY || 
+    (import.meta as any).env?.VITE_USER_GEMINI_KEY ||
+    (import.meta as any).env?.VITE_GEMINI_API_KEY ||
+    "" 
+});
+
 export async function askGeoBotanico(query: string, contextData: any[]) {
   try {
+    const prompt = `Pergunta do Pesquisador: ${query}\n\nDados Botânicos: ${JSON.stringify(contextData)}`;
+    
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Aqui estão os dados atuais do banco: ${JSON.stringify(contextData)}.
-Pergunta do pesquisador: '${query}'`,
+      contents: prompt,
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: SYSTEM_INSTRUCTION
       }
     });
 
-    return response.text || "Sem resposta do assistente.";
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    return "Desculpe, tive um erro ao processar sua análise botânica. Verifique se a chave de API está configurada corretamente.";
+    return response.text || "Sem resposta do GeoBotânico.";
+  } catch (error: any) {
+    console.error("Gemini Service Error:", error);
+    return `Erro na IA: ${error.message || "Falha na geração"}`;
   }
 }
 
@@ -43,21 +48,15 @@ export async function analyzeScientificPaper(query: string, paperText: string) {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `Com base no seguinte texto científico:
----
-${paperText}
----
-Assunto: ${query}
-
-Responda de forma técnica e objetiva.`,
+      contents: `Conteúdo do Artigo: ${paperText}\n\nPergunta: ${query}`,
       config: {
-        systemInstruction: "Aja como um assistente RAG especializado em botânica mineira.",
+        systemInstruction: "Aja como um assistente RAG especializado em botânica mineira. Responda de forma técnica e objetiva."
       }
     });
 
-    return response.text || "Erro ao analisar o artigo científico.";
-  } catch (error) {
-    console.error("Gemini RAG Error:", error);
-    return "Erro ao analisar o artigo científico.";
+    return response.text || "Erro ao analisar o artigo.";
+  } catch (error: any) {
+    console.error("Gemini Paper Error:", error);
+    return `Erro ao processar o artigo: ${error.message}`;
   }
 }
