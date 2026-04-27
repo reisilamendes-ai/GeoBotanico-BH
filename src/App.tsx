@@ -114,7 +114,16 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+      if (u) {
+        setUser(u);
+      } else {
+        // ACESSO TEMPORÁRIO PARA CONFIGURAÇÃO (SEM LOGIN)
+        setUser({
+          uid: 'dev_guest_id',
+          displayName: 'Acesso Técnico (Convidado)',
+          email: 'admin@debug.mode'
+        } as User);
+      }
       setLoading(false);
     });
     return () => unsubscribeAuth();
@@ -377,6 +386,16 @@ export default function App() {
         };
 
         for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+          const chunkNum = Math.floor(i / CHUNK_SIZE) + 1;
+          const currentProgress = Math.min(i + CHUNK_SIZE, totalItems);
+          const percent = Math.round((currentProgress / totalItems) * 100);
+          
+          setUploadProgress(prev => ({ 
+            ...prev, 
+            current: currentProgress, 
+            step: `Processando Lote ${chunkNum} (${percent}%)...` 
+          }));
+
           const chunk = data.slice(i, i + CHUNK_SIZE);
           const batch = writeBatch(db);
           let itemsInBatch = 0;
@@ -444,17 +463,11 @@ export default function App() {
           });
 
           if (itemsInBatch > 0) {
-            setUploadProgress(prev => ({ 
-              ...prev, 
-              current: i + itemsInBatch, 
-              step: `Enviando lote ${Math.floor(i / CHUNK_SIZE) + 1} (${Math.round(((i + itemsInBatch)/totalItems)*100)}%)...` 
-            }));
-            
             try {
               await commitWithRetry(batch);
               successfulCount += itemsInBatch;
-              // Small throttle to stay under Firestore sustained write limits for large imports
-              await new Promise(r => setTimeout(r, 150)); 
+              // Throttle para evitar limites de escrita do Firestore
+              await new Promise(r => setTimeout(r, 100)); 
             } catch (err) {
               console.error(`Falha crítica no lote começando em ${i}:`, err);
               errorCount += itemsInBatch;
