@@ -786,25 +786,27 @@ export default function App() {
                 </MapContainer>
                 
                 {/* Legend Overlay */}
-                <div className="absolute bottom-6 right-6 bg-white/95 backdrop-blur-sm p-5 rounded-2xl border border-[#D7CCC8] shadow-2xl w-60 z-[1000]">
-                  <p className="text-[11px] font-bold text-[#2D5A27] mb-4 uppercase tracking-[0.1em] flex items-center gap-2">
-                    <CheckCircle2 size={14} /> Monitoramento Urbano
-                  </p>
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3 text-[10px] font-semibold text-[#5D4037]">
-                      <span className="w-3 h-3 bg-[#9E9E9E] rounded-full border border-gray-400"></span>
-                      População BH (Base)
-                    </div>
-                    <div className="flex items-center gap-3 text-[10px] font-semibold text-[#2D5A27]">
-                      <span className="w-3 h-3 bg-[#2ecc71] rounded-full border border-[#27ae60]"></span>
-                      Hospedeiras de Pesquisa
-                    </div>
-                    <div className="flex items-center gap-3 text-[10px] font-semibold text-[#E67E22]">
-                      <span className="w-3 h-3 bg-[#E67E22] rounded-full shadow-[0_0_8px_#E67E22]"></span>
-                      Presença de Galhas
+                {!isUploadingXlsx && !showLoginModal && !showTemplateModal && !isAiLoading && (
+                  <div className="absolute bottom-6 right-6 bg-white/95 backdrop-blur-sm p-5 rounded-2xl border border-[#D7CCC8] shadow-2xl w-60 z-[400] text-[#3E2723]">
+                    <p className="text-[11px] font-bold text-[#2D5A27] mb-4 uppercase tracking-[0.1em] flex items-center gap-2">
+                      <CheckCircle2 size={14} /> Monitoramento Urbano
+                    </p>
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-3 text-[10px] font-semibold text-[#5D4037]">
+                        <span className="w-3 h-3 bg-[#9E9E9E] rounded-full border border-gray-400"></span>
+                        População BH (Base)
+                      </div>
+                      <div className="flex items-center gap-3 text-[10px] font-semibold text-[#2D5A27]">
+                        <span className="w-3 h-3 bg-[#2ecc71] rounded-full border border-[#27ae60]"></span>
+                        Hospedeiras de Pesquisa
+                      </div>
+                      <div className="flex items-center gap-3 text-[10px] font-semibold text-[#E67E22]">
+                        <span className="w-3 h-3 bg-[#E67E22] rounded-full shadow-[0_0_8px_#E67E22]"></span>
+                        Presença de Galhas
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
 
                 {exporting && (
                   <motion.div 
