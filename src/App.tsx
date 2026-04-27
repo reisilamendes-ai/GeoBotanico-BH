@@ -285,6 +285,14 @@ export default function App() {
               if (type === 'gall') tags.push('Galha');
               if (type === 'base') tags.push('Base');
 
+              // Identify extra columns to preserve "spreadsheet format"
+              const extraData: Record<string, any> = {};
+              Object.keys(row).forEach(key => {
+                if (!['species', 'especie', 'lat', 'lng', 'latitude', 'longitude', 'region', 'regiao', 'tags'].includes(key.toLowerCase())) {
+                  extraData[key] = row[key];
+                }
+              });
+
               batch.set(docRef, {
                 species: species,
                 location: {
@@ -295,7 +303,8 @@ export default function App() {
                 tags: tags,
                 researcherId: user.uid,
                 researcherName: user.displayName || 'Sistema',
-                createdAt: serverTimestamp()
+                createdAt: serverTimestamp(),
+                additionalInfo: extraData
               });
               itemsInBatch++;
               successfulCount++;
@@ -365,7 +374,8 @@ export default function App() {
       lat: i.location.lat,
       long: i.location.lng,
       regiao: i.location.region,
-      tags: i.tags
+      tags: i.tags,
+      dados_adicionais: i.additionalInfo
     }));
 
     const response = await askGeoBotanico(chatInput, context);
@@ -485,42 +495,38 @@ export default function App() {
                   <FileSpreadsheet size={24} />
                 </div>
                 <div>
-                  <h3 className="text-xl font-serif font-bold text-[#2D5A27]">Modelo de Tabela Válido</h3>
-                  <p className="text-xs text-[#5D4037]">Certifique-se que sua planilha possui estas colunas:</p>
+                  <h3 className="text-xl font-serif font-bold text-[#2D5A27]">Guia de Importação Flexível</h3>
+                  <p className="text-xs text-[#5D4037]">O sistema se adapta à sua planilha!</p>
                 </div>
               </div>
 
               <div className="bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl overflow-hidden mb-6">
-                <div className="grid grid-cols-4 bg-[#D7CCC8]/20 p-3 text-[10px] font-bold uppercase tracking-wider text-[#5D4037] border-b border-[#D7CCC8]/30">
-                  <div>especie</div>
-                  <div>latitude</div>
-                  <div>longitude</div>
-                  <div>regiao</div>
+                <div className="bg-[#D7CCC8]/20 p-3 text-[10px] font-bold uppercase tracking-wider text-[#5D4037] border-b border-[#D7CCC8]/30">
+                  Colunas Essenciais (Detectadas Automaticamente)
                 </div>
-                <div className="grid grid-cols-4 p-3 text-sm text-[#3E2723] gap-y-2 font-mono">
-                  <div className="text-blue-600">Sibipiruna</div>
-                  <div>-19.9213</div>
-                  <div>-43.9412</div>
-                  <div>Centro</div>
-                  
-                  <div className="text-blue-600">Ipê Amarelo</div>
-                  <div>-19.9345</div>
-                  <div>-43.9102</div>
-                  <div>Savassi</div>
+                <div className="p-4 space-y-4">
+                  <div className="flex items-center gap-4">
+                    <div className="w-24 text-[10px] font-bold text-[#E67E22]">LOCALIZAÇÃO</div>
+                    <div className="flex-1 text-sm text-[#3E2723]">Use colunas como: <i>latitude, longitude, lat, log, X, Y</i>.</div>
+                  </div>
+                  <div className="flex items-center gap-4 border-t border-[#D7CCC8]/20 pt-4">
+                    <div className="w-24 text-[10px] font-bold text-[#2D5A27]">IDENTIFICAÇÃO</div>
+                    <div className="flex-1 text-sm text-[#3E2723]">Use colunas como: <i>especie, taxon, nome, arvore</i>.</div>
+                  </div>
                 </div>
               </div>
 
               <div className="space-y-3">
                 <p className="text-xs text-[#5D4037] leading-relaxed">
-                  • <strong>Coordenadas:</strong> Devem ser números decimais (ex: -19.92).<br/>
-                  • <strong>Variantes aceitas:</strong> O sistema também reconhece <i>lat, lng, long, x, y, arvore, bairro</i>.<br/>
+                  • <strong>Dica de Ouro:</strong> O sistema armazenará <strong>todas</strong> as outras colunas da sua planilha (ex: DAP, altura, estado fitossanitário) como metadados extras.<br/>
+                  • <strong>Liberdade:</strong> Não se preocupe se não tiver <i>região</i> ou <i>bairro</i>; o sistema processará o que encontrar!<br/>
                   • <strong>Formato:</strong> Use arquivos .XLSX ou .XLS.
                 </p>
                 <button 
                   onClick={() => setShowTemplateModal(false)}
                   className="w-full bg-[#2D5A27] text-white py-3 rounded-xl font-bold text-sm mt-4"
                 >
-                  Entendi, fechar!
+                  Entendi, importar agora!
                 </button>
               </div>
             </motion.div>
@@ -907,6 +913,15 @@ export default function App() {
                     <p className="text-[10px] text-[#5D4037] font-sans">
                       {tree.tags.includes('Galha') ? '⚠️ Presença de patógeno detectado' : '✅ Espécime saudável'}
                     </p>
+                    {tree.additionalInfo && Object.keys(tree.additionalInfo).length > 0 && (
+                      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[9px] text-[#5D4037]/70 italic">
+                        {Object.entries(tree.additionalInfo).slice(0, 4).map(([key, val]) => (
+                          <div key={key} className="truncate">
+                            <span className="font-bold">{key}:</span> {String(val)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="mt-2 flex gap-1">
                        {tree.tags.map(t => <span key={t} className="text-[8px] bg-white border border-[#D7CCC8] px-1.5 py-0.5 rounded text-[#5D4037] font-bold">{t}</span>)}
                     </div>

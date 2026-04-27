@@ -12,6 +12,7 @@ export interface TreeRecord {
   researcherId: string;
   researcherName: string;
   createdAt: any; // Firestore Timestamp
+  additionalInfo?: Record<string, any>;
 }
 
 export interface GallAnalysis {
