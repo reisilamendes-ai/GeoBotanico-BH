@@ -119,6 +119,20 @@ export default function App() {
     return () => unsubscribeAuth();
   }, []);
 
+  const handleGoogleLogin = async () => {
+    setIsLoggingIn(true);
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      setShowLoginModal(false);
+    } catch (error: any) {
+      console.error("Google Login Error:", error);
+      alert(`Erro ao acessar com Google: ${error.message}`);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
   const handleTestLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const { nickname, password } = loginForm;
@@ -516,6 +530,24 @@ export default function App() {
                 >
                   {isLoggingIn ? <Loader2 className="animate-spin" /> : <>Acessar Sistema <ChevronRight size={20} /></>}
                 </button>
+
+                <div className="relative my-6">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-[#D7CCC8]/50"></div>
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-[#9E9E9E]">Ou acesse com</span>
+                  </div>
+                </div>
+
+                <button 
+                  type="button"
+                  onClick={handleGoogleLogin}
+                  disabled={isLoggingIn}
+                  className="w-full bg-white border-2 border-[#D7CCC8]/30 text-[#3E2723] py-4 rounded-2xl font-bold hover:bg-gray-50 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+                >
+                  <Globe size={20} className="text-[#4285F4]" /> Continuar com Google
+                </button>
               </form>
             </motion.div>
           </motion.div>
@@ -692,7 +724,7 @@ export default function App() {
                   onClick={() => setShowLoginModal(true)}
                   className="bg-[#E67E22] text-white px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg hover:bg-[#D35400] transition-all flex items-center gap-2"
                 >
-                  <LogIn size={14} /> Login Teste
+                  <LogIn size={14} /> Entrar / Login
                 </button>
               </div>
             )}
