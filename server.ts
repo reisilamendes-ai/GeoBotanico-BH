@@ -32,8 +32,16 @@ Restrições:
 - Peça detalhes morfológicos se houver incerteza.`;
 
   // API Routes
+  console.log("Setting up API routes...");
+
   app.post("/api/ask", async (req, res) => {
+    console.log("Received /api/ask request");
     try {
+      if (!process.env.GEMINI_API_KEY) {
+        console.error("GEMINI_API_KEY is not defined in environment");
+        return res.status(500).json({ error: "Configuração de API ausente no servidor." });
+      }
+
       const { query, contextData } = req.body;
       const model = genAI.getGenerativeModel({ 
         model: "gemini-1.5-flash",
@@ -43,7 +51,9 @@ Restrições:
       const result = await model.generateContent(`Aqui estão os dados atuais do banco: ${JSON.stringify(contextData)}.
 Pergunta do pesquisador: '${query}'`);
       
-      res.json({ response: result.response.text() });
+      const responseText = result.response.text();
+      console.log("Gemini responded successfully");
+      res.json({ response: responseText });
     } catch (error) {
       console.error("Gemini Error:", error);
       res.status(500).json({ error: "Erro ao processar a análise botânica." });
