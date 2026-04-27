@@ -125,9 +125,14 @@ export default function App() {
         id: doc.id,
         ...doc.data()
       })) as TreeRecord[];
+      console.log(`Loaded ${records.length} base trees`);
       setBaseTrees(records);
     }, (error) => {
-      console.warn("Base trees load warning:", error);
+      console.error("Base trees load error:", error);
+      // If error is permission denied, it might mean email not verified
+      if (error.message.includes("permission-denied")) {
+        alert("Erro de permissão ao carregar dados base. Verifique se seu e-mail do Google está verificado.");
+      }
     });
 
     return () => {
@@ -204,10 +209,10 @@ export default function App() {
           let itemsInBatch = 0;
 
           chunk.forEach((row) => {
-            const species = row.species || row.especie || row.Especie || row.NOME_CIENTIFICO || row.Nome || row.Taxon || 'Não identificado';
-            const lat = Number(row.lat || row.latitude || row.LATITUDE || row.Lat || row.Y || row.CoordY);
-            const lng = Number(row.lng || row.long || row.longitude || row.LONGITUDE || row.Long || row.X || row.CoordX);
-            const region = row.region || row.regiao || row.Regiao || row.BAIRRO || row.Local || 'BH';
+            const species = (row.species || row.especie || row.Especie || row.NOME_CIENTIFICO || row.Nome || row.Taxon || row.Arvore || 'Não identificado').slice(0, 190);
+            const lat = Number(row.lat || row.latitude || row.LATITUDE || row.Lat || row.Y || row.CoordY || row.Ponto_Y);
+            const lng = Number(row.lng || row.long || row.longitude || row.LONGITUDE || row.Long || row.X || row.CoordX || row.Ponto_X);
+            const region = row.region || row.regiao || row.Regiao || row.BAIRRO || row.Local || row.Distrito || 'BH';
 
             if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
               const docRef = doc(collection(db, collectionPath));
@@ -241,9 +246,9 @@ export default function App() {
         }
 
         if (successfulCount > 0) {
-          alert(`${successfulCount} registros importados com sucesso na categoria: ${type}!`);
+          alert(`Sucesso! ${successfulCount} registros importados na categoria: ${type}.`);
         } else {
-          alert("Nenhum registro válido encontrado. Verifique se as colunas de Latitude e Longitude estão corretas (ex: lat, long, latitude, longitude).");
+          alert("Aviso: Nenhum registro válido encontrado. Verifique se as colunas de Latitude e Longitude existem e possuem números válidos (ex: lat, long, latitude, longitude, X, Y).");
         }
       } catch (error: any) {
         console.error("Error importing XLSX:", error);

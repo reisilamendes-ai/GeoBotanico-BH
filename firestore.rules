@@ -38,8 +38,8 @@ service cloud.firestore {
     match /tree_records/{treeId} {
       allow get: if isSignedIn();
       allow list: if isSignedIn();
-      allow create: if isVerifiedEmail() && isValidId(treeId) && isValidTreeRecord(incoming());
-      allow update: if isVerifiedEmail() && (
+      allow create: if isSignedIn() && isValidId(treeId) && isValidTreeRecord(incoming());
+      allow update: if isSignedIn() && (
         isAdmin() || (
           existing().researcherId == request.auth.uid &&
           isValidTreeRecord(incoming()) &&
@@ -51,7 +51,7 @@ service cloud.firestore {
 
     match /base_trees/{treeId} {
       allow read: if isSignedIn();
-      allow create: if isVerifiedEmail() && isValidId(treeId) && isValidTreeRecord(incoming());
+      allow create: if isSignedIn() && isValidId(treeId) && isValidTreeRecord(incoming());
       allow update, delete: if isAdmin();
     }
 
