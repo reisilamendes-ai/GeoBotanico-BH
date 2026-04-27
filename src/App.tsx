@@ -15,7 +15,7 @@ import {
 import { 
   collection, addDoc, onSnapshot, 
   query, orderBy, serverTimestamp,
-  writeBatch, doc
+  writeBatch, doc, limit, getDocs
 } from 'firebase/firestore';
 import { 
   signInWithPopup, GoogleAuthProvider, 
@@ -74,6 +74,100 @@ function ChangeView({ center }: { center: [number, number] }) {
   return null;
 }
 
+// Componente de alta performance para renderizar centenas de milhares de pontos no Leaflet via Canvas
+const StaticInventoryLayer = ({ trees }: { trees: TreeRecord[] }) => {
+  const map = useMap();
+  const layerGroupRef = useRef<L.LayerGroup | null>(null);
+
+  useEffect(() => {
+    if (!map || trees.length === 0) {
+      if (layerGroupRef.current) {
+        map.removeLayer(layerGroupRef.current);
+        layerGroupRef.current = null;
+      }
+      return;
+    }
+
+    // Limpeza para evitar duplicidade em re-renders
+    if (layerGroupRef.current) {
+      map.removeLayer(layerGroupRef.current);
+    }
+
+    const canvasRenderer = L.canvas({ padding: 0.1 });
+    const markers: L.CircleMarker[] = [];
+
+    // Removida a amostragem: Processamos TODOS os pontos (260k+)
+    // Otimização: O Leaflet Canvas lida bem com grandes volumes se desativarmos interatividade
+    
+    // Cálculo de raio dinâmico baseado no zoom atual
+    const getDynamicRadius = (z: number) => {
+      if (z <= 12) return 0.8;
+      if (z <= 14) return 1.5;
+      if (z <= 16) return 3;
+      if (z >= 18) return 6;
+      return 4;
+    };
+
+    const currentRadius = getDynamicRadius(map.getZoom());
+
+    for (let i = 0; i < trees.length; i++) {
+      const tree = trees[i];
+      if (!tree || !tree.location || !tree.location.lat || !tree.location.lng) continue;
+      
+      const marker = L.circleMarker([tree.location.lat, tree.location.lng], {
+        renderer: canvasRenderer,
+        radius: currentRadius,
+        fillColor: '#9E9E9E',
+        color: '#757575',
+        weight: 0.2,
+        fillOpacity: 0.3,
+        interactive: false
+      });
+      markers.push(marker);
+    }
+
+    layerGroupRef.current = L.layerGroup(markers).addTo(map);
+
+    // Adiciona listener para ajustar o tamanho dos pontos ao mudar o zoom
+    const handleZoomEnd = () => {
+      const newRadius = getDynamicRadius(map.getZoom());
+      markers.forEach(m => m.setRadius(newRadius));
+    };
+
+    map.on('zoomend', handleZoomEnd);
+
+    return () => {
+      map.off('zoomend', handleZoomEnd);
+      if (layerGroupRef.current && map) {
+        map.removeLayer(layerGroupRef.current);
+      }
+    };
+  }, [map, trees]);
+
+  return null;
+};
+
+// Helper to find column case-insensitively and ignoring spaces
+const getRowVal = (row: any, aliases: string[]) => {
+  const keys = Object.keys(row);
+  const foundKey = keys.find(k => {
+    const normalizedK = String(k).toLowerCase().replace(/[\s_.-]/g, '');
+    return aliases.some(alias => normalizedK === alias.toLowerCase().replace(/[\s_.-]/g, ''));
+  });
+  return foundKey ? row[foundKey] : undefined;
+};
+
+const parseCoord = (val: any) => {
+  if (val === undefined || val === null || val === "") return NaN;
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') {
+    const normalized = val.replace(',', '.').trim();
+    const num = parseFloat(normalized);
+    return isNaN(num) ? NaN : num;
+  }
+  return NaN;
+};
+
 export default function App() {
   const [user, setUser] = useState<any>(null);
   const [items, setItems] = useState<TreeRecord[]>([]); // Research trees (Galls/Host)
@@ -83,14 +177,98 @@ export default function App() {
   const [isLocating, setIsLocating] = useState(false);
   const [isUploadingXlsx, setIsUploadingXlsx] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, step: '' });
+  const [inventoryStats, setInventoryStats] = useState({ total: 0, displayed: 0 });
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [loginForm, setLoginForm] = useState({ nickname: '', password: '' });
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [externalUrl, setExternalUrl] = useState(localStorage.getItem('galhas_inventory_url') || '');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const researchInputRef = useRef<HTMLInputElement>(null);
   const baseInputRef = useRef<HTMLInputElement>(null);
+  // Carregamento automático de inventário persistente
+  useEffect(() => {
+    const savedUrl = localStorage.getItem('galhas_inventory_url');
+    
+    const autoLoadFile = async (url: string) => {
+      try {
+        console.log("Tentando carregamento automático:", url);
+        
+        let targetUrl = url;
+        // Auto-fix for Google Sheets URLs
+        if (url.includes('docs.google.com/spreadsheets')) {
+          if (!url.includes('/export')) {
+            const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+            if (match && match[1]) {
+              targetUrl = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
+              console.log("Convertendo link do Drive para exportação:", targetUrl);
+            }
+          }
+        }
+
+        const response = await fetch(targetUrl);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        
+        const buffer = await response.arrayBuffer();
+        const wb = XLSX.read(buffer, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws) as any[];
+        
+        if (data.length > 0) {
+           console.log(`Inventário persistente carregado: ${data.length} registros.`);
+           processLocalInventory(data);
+        }
+      } catch (err) {
+        console.error("Erro no carregamento automático:", err);
+        // Não alertamos aqui para não ser intrusivo no boot, mas logamos
+      }
+    };
+
+    if (savedUrl) {
+      autoLoadFile(savedUrl);
+    } else {
+      autoLoadFile('/inventory_bh.xlsx');
+    }
+  }, []);
+
+  const processLocalInventory = (data: any[]) => {
+    const totalItems = data.length;
+    const localTrees: TreeRecord[] = [];
+    // Aumentamos o limite para processar o inventário completo (BH tem ~260k)
+    const MAX_PROCESS = 300000;
+    const step = totalItems > MAX_PROCESS ? Math.floor(totalItems / MAX_PROCESS) : 1;
+    
+    setInventoryStats({ total: totalItems, displayed: totalItems });
+
+    for (let i = 0; i < data.length; i += step) {
+      const row = data[i];
+      const speciesVal = getRowVal(row, ['species', 'especie', 'nome', 'taxon', 'arvore', 'nomecientifico']);
+      const species = (typeof speciesVal === 'string' ? speciesVal : 'Não identificado').slice(0, 100);
+      const latVal = getRowVal(row, ['latitude', 'lat', 'y', 'coordinate_y', 'coordy', 'pontoy']);
+      const lngVal = getRowVal(row, ['longitude', 'long', 'lng', 'x', 'coordinate_x', 'coordx', 'pontox']);
+      const lat = parseCoord(latVal);
+      const lng = parseCoord(lngVal);
+
+      if (!isNaN(lat) && !isNaN(lng) && lat !== 0) {
+        localTrees.push({
+          id: `local-${i}`,
+          species,
+          location: { 
+            lat, 
+            lng,
+            region: String(getRowVal(row, ['region', 'regiao']) || 'BH').slice(0, 50)
+          },
+          researcherId: 'local_inventory',
+          researcherName: 'Inventário BH',
+          createdAt: new Date().toISOString(),
+          tags: ['Base']
+        });
+      }
+    }
+    setBaseTrees(localTrees);
+  };
 
   // AI State
   const [chatInput, setChatInput] = useState('');
@@ -113,24 +291,18 @@ export default function App() {
   };
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, async (u) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (u) => {
       if (u) {
         setUser(u);
-        setLoading(false);
       } else {
-        try {
-          const anonResult = await signInAnonymously(auth);
-          await updateProfile(anonResult.user, {
-            displayName: 'Acesso Técnico'
-          });
-          setUser(anonResult.user);
-        } catch (err) {
-          console.error("Falha no login anônimo técnico:", err);
-          setUser({ uid: 'guest', displayName: 'Convidado' } as User);
-        } finally {
-          setLoading(false);
-        }
+        // MODO TÉCNICO: Permite ver o dashboard sem login real para configuração
+        setUser({
+          uid: 'convidado_tecnico',
+          displayName: 'Visitante Técnico',
+          email: 'guest@config.mode'
+        } as User);
       }
+      setLoading(false);
     });
     return () => unsubscribeAuth();
   }, []);
@@ -234,8 +406,24 @@ export default function App() {
     }
   };
 
+  const handleSaveSettings = () => {
+    let url = externalUrl.trim();
+    if (url.includes('docs.google.com/spreadsheets') && !url.includes('/export')) {
+      const match = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      if (match && match[1]) {
+        url = `https://docs.google.com/spreadsheets/d/${match[1]}/export?format=xlsx`;
+        setExternalUrl(url);
+      }
+    }
+    
+    localStorage.setItem('galhas_inventory_url', url);
+    setShowSettings(false);
+    alert("Configurações salvas. O inventário será recarregado automaticamente.");
+    window.location.reload();
+  };
+
   const handleLogout = async () => {
-    await auth.signOut();
+    await signOut(auth);
     setUser(null);
   };
 
@@ -257,19 +445,25 @@ export default function App() {
       handleFirestoreError(error, OperationType.LIST, 'tree_records');
     });
 
-    const bq = query(collection(db, 'base_trees'));
+    // Aumentamos o teto para permitir visualizar mais dados da nuvem simultaneamente.
+    const bq = query(collection(db, 'base_trees'), limit(30000));
     const unsubscribeBase = onSnapshot(bq, (snapshot) => {
       const records = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as TreeRecord[];
-      console.log(`Loaded ${records.length} base trees`);
-      setBaseTrees(records);
+      console.log(`Loaded ${records.length} base units from cloud`);
+      setBaseTrees(prev => {
+        // Mantemos os dados locais e concatenamos com os da nuvem (evitando duplicatas se o ID for igual)
+        const localOnly = prev.filter(p => p.id.startsWith('local-'));
+        const cloudIds = new Set(records.map(r => r.id));
+        const filteredLocal = localOnly.filter(p => !cloudIds.has(p.id));
+        return [...filteredLocal, ...records];
+      });
     }, (error) => {
       console.error("Base trees load error:", error);
-      // If error is permission denied, it might mean email not verified
       if (error.message.includes("permission-denied")) {
-        alert("Erro de permissão ao carregar dados base. Verifique se seu e-mail do Google está verificado.");
+        console.warn("Permissão negada para carregar base_trees. Isso é esperado se não estiver logado.");
       }
     });
 
@@ -309,9 +503,9 @@ export default function App() {
       console.log("No file selected");
       return;
     }
-    if (!user) {
-      console.log("User not logged in");
-      alert("Por favor, faça login para realizar o upload de dados.");
+    if (!user || user.uid === 'convidado_tecnico') {
+      alert("O processamento de planilhas exige uma conta autenticada para gravar no bando de dados. Por favor, faça login clicando em 'Acessar Conta' no topo.");
+      setShowLoginModal(true);
       return;
     }
 
@@ -348,32 +542,26 @@ export default function App() {
         const totalItems = data.length;
         setUploadProgress({ current: 0, total: totalItems, step: 'Iniciando processamento...' });
 
-        // Helper to find column case-insensitively and ignoring spaces
-        const getRowVal = (row: any, aliases: string[]) => {
-          const keys = Object.keys(row);
-          const foundKey = keys.find(k => {
-            const normalizedK = String(k).toLowerCase().replace(/[\s_.-]/g, '');
-            return aliases.some(alias => normalizedK === alias.toLowerCase().replace(/[\s_.-]/g, ''));
-          });
-          return foundKey ? row[foundKey] : undefined;
-        };
+        // ESTRATÉGIA HÍBRIDA: Dados de "Base" (Inventário BH) são carregados apenas LOCALMENTE
+        if (type === 'base') {
+          processLocalInventory(data);
+          alert(`Modo Híbrido Ativado!\n\n${totalItems} registros processados.\nO inventário foi carregado localmente para não consumir sua cota de banco de dados.`);
+          setIsUploadingXlsx(false);
+          setUploadProgress(null);
+          return;
+        }
 
-        const parseCoord = (val: any) => {
-          if (val === undefined || val === null || val === "") return NaN;
-          if (typeof val === 'number') return val;
-          if (typeof val === 'string') {
-            const normalized = val.replace(',', '.').trim();
-            const num = parseFloat(normalized);
-            return isNaN(num) ? NaN : num;
-          }
-          return NaN;
-        };
+        // Warning for huge spreadsheets only for non-base types
+        if (totalItems > 15000) {
+          alert(`ALERTA DE COTA: Sua planilha possui ${totalItems} registros. \n\nO limite diário gratuito do bando de dados é limitado. \n\nPor favor, utilize uma planilha com no máximo 5.000 registros.`);
+          setIsUploadingXlsx(false);
+          return;
+        }
 
-        const collectionPath = type === 'base' ? 'base_trees' : 'tree_records';
-        
-        // Firestore batches are limited to 500 operations.
-        // We will use smaller chunks and a small delay to avoid rate limiting
-        const CHUNK_SIZE = 250; 
+        const collectionPath = type as string === 'base' ? 'base_trees' : 'tree_records';
+
+        // Dados de Galhas (Records) continuam indo para o Firestore em lotes pequenos
+        const CHUNK_SIZE = 100; 
         let successfulCount = 0;
         let errorCount = 0;
 
@@ -423,9 +611,9 @@ export default function App() {
               const docRef = doc(collection(db, collectionPath));
               const tags = row.tags ? String(row.tags).split(',').map((t: string) => t.trim()) : [];
               
-              if (type === 'research') tags.push('Hospedeira');
-              if (type === 'gall') tags.push('Galha');
-              if (type === 'base') tags.push('Base');
+              if (type as string === 'research') tags.push('Hospedeira');
+              if (type as string === 'gall') tags.push('Galha');
+              if (type as string === 'base') tags.push('Base');
 
               // Preserve extra metadata
               const extraData: Record<string, any> = {};
@@ -511,7 +699,11 @@ export default function App() {
 
   const handleAddRecord = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || user.uid === 'convidado_tecnico') {
+       alert("Para gravar novos dados no banco, você precisa de uma conta real. Clique em 'Acessar Conta' no topo.");
+       setShowLoginModal(true);
+       return;
+    }
 
     try {
       const path = 'tree_records';
@@ -738,56 +930,112 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-      <AnimatePresence>
-        {isUploadingXlsx && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-[#3E2723]/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6"
-          >
+        {/* Settings Modal */}
+        <AnimatePresence>
+          {showSettings && (
             <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white p-8 rounded-[32px] shadow-2xl max-w-md w-full flex flex-col items-center gap-6 text-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-[#3E2723]/80 backdrop-blur-md z-[250] flex items-center justify-center p-6"
             >
-              <div className="relative">
-                <div className="absolute inset-0 bg-[#E67E22]/20 blur-xl rounded-full animate-pulse"></div>
-                <div className="bg-[#E67E22] p-6 rounded-full text-white relative">
-                  <FileSpreadsheet size={48} />
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="text-2xl font-serif font-bold text-[#2D5A27]">{uploadProgress.step}</h3>
-                <p className="text-sm text-[#5D4037] mt-2 font-medium">Isso pode levar alguns segundos dependendo do tamanho da planilha.</p>
-              </div>
-
-              {uploadProgress.total > 0 && (
-                <div className="w-full space-y-2">
-                  <div className="flex justify-between text-[10px] font-bold uppercase text-[#5D4037] tracking-widest">
-                    <span>Progresso</span>
-                    <span>{Math.round((uploadProgress.current / uploadProgress.total) * 100)}%</span>
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="bg-white p-8 rounded-[32px] shadow-2xl max-w-sm w-full relative"
+              >
+                <button 
+                  onClick={() => setShowSettings(false)}
+                  className="absolute top-6 right-6 text-[#9E9E9E] hover:text-black"
+                >
+                  <X size={24} />
+                </button>
+                
+                <div className="mb-6">
+                  <div className="bg-[#5D4037] p-3 w-fit rounded-2xl text-white mb-4">
+                    <Globe size={24} />
                   </div>
-                  <div className="w-full h-3 bg-[#D7CCC8]/30 rounded-full overflow-hidden border border-[#D7CCC8]/50">
-                    <motion.div 
-                      className="h-full bg-[#E67E22]"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
-                      transition={{ ease: "easeOut" }}
+                  <h3 className="text-xl font-serif font-bold text-[#2D5A27]">Link de Dados Externo</h3>
+                  <p className="text-xs text-[#5D4037] mt-1">Conecte sua planilha do Drive ou servidor.</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#5D4037] ml-1">URL da Planilha (.xlsx ou .csv)</label>
+                    <input 
+                      type="url" 
+                      placeholder="https://docs.google.com/spreadsheets/d/.../export?format=xlsx"
+                      className="w-full bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl px-5 py-3 text-xs focus:border-[#2D5A27] focus:outline-none transition-all"
+                      value={externalUrl}
+                      onChange={e => setExternalUrl(e.target.value)}
                     />
+                    <p className="text-[9px] text-[#7F8C8D] mt-1 italic">
+                      Dica: No Google Drive, use "Arquivo &rarr; Compartilhar &rarr; Publicar na Web" e escolha o link CSV/XLSX.
+                    </p>
                   </div>
-                  <p className="text-[10px] text-[#9E9E9E]">
-                    Processados {uploadProgress.current} de {uploadProgress.total} registros
-                  </p>
-                </div>
-              )}
 
-              <Loader2 className="animate-spin text-[#2D5A27] mt-2" size={32} />
+                  <button 
+                    onClick={handleSaveSettings}
+                    className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-[#1B3A18] transition-all"
+                  >
+                    Salvar e Carregar
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
+          )}
+        </AnimatePresence>
+
+        {isUploadingXlsx && (
+          <AnimatePresence>
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-[#3E2723]/60 backdrop-blur-sm z-[200] flex items-center justify-center p-6"
+            >
+              <motion.div 
+                initial={{ scale: 0.9, y: 20 }}
+                animate={{ scale: 1, y: 0 }}
+                className="bg-white p-8 rounded-[32px] shadow-2xl max-w-md w-full flex flex-col items-center gap-6 text-center"
+              >
+                <div className="relative">
+                  <div className="absolute inset-0 bg-[#E67E22]/20 blur-xl rounded-full animate-pulse"></div>
+                  <div className="bg-[#E67E22] p-6 rounded-full text-white relative">
+                    <FileSpreadsheet size={48} />
+                  </div>
+                </div>
+                
+                <div>
+                  <h3 className="text-2xl font-serif font-bold text-[#2D5A27]">{uploadProgress.step}</h3>
+                  <p className="text-sm text-[#5D4037] mt-2 font-medium">Isso pode levar alguns segundos dependendo do tamanho da planilha.</p>
+                </div>
+
+                {uploadProgress.total > 0 && (
+                  <div className="w-full space-y-2">
+                    <div className="flex justify-between text-[10px] font-bold uppercase text-[#5D4037] tracking-widest">
+                      <span>Progresso</span>
+                      <span>{Math.round((uploadProgress.current / uploadProgress.total) * 100)}%</span>
+                    </div>
+                    <div className="w-full h-3 bg-[#D7CCC8]/30 rounded-full overflow-hidden border border-[#D7CCC8]/50">
+                      <motion.div 
+                        className="h-full bg-[#E67E22]"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                        transition={{ ease: "easeOut" }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-[#9E9E9E]">
+                      Processados {uploadProgress.current} de {uploadProgress.total} registros
+                    </p>
+                  </div>
+                )}
+
+                <Loader2 className="animate-spin text-[#2D5A27] mt-2" size={32} />
+              </motion.div>
+            </motion.div>
+          </AnimatePresence>
         )}
-      </AnimatePresence>
 
       <header className="bg-[#2D5A27] text-white px-6 py-4 md:px-8 shadow-lg border-bottom border-b-4 border-[#E67E22] sticky top-0 z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
@@ -829,12 +1077,17 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <div className="flex gap-2">
+              <div className="flex items-center gap-4">
+                {user?.uid === 'convidado_tecnico' && (
+                  <span className="bg-amber-100 text-amber-800 text-[10px] px-2 py-1 rounded-full font-bold animate-pulse hidden md:block">
+                    MODO TÉCNICO
+                  </span>
+                )}
                 <button 
                   onClick={() => setShowLoginModal(true)}
                   className="bg-[#E67E22] text-white px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg hover:bg-[#D35400] transition-all flex items-center gap-2"
                 >
-                  <LogIn size={14} /> Entrar / Login
+                  <LogIn size={14} /> {user?.uid === 'convidado_tecnico' ? 'Acessar Conta' : 'Mudar Usuário'}
                 </button>
               </div>
             )}
@@ -947,32 +1200,19 @@ export default function App() {
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   />
                   
-                  {/* Layer 1: Base Population (Grey) */}
-                  {baseTrees.map((tree) => (
-                    <CircleMarker 
-                      key={`base-${tree.id}`}
-                      center={[tree.location.lat, tree.location.lng]}
-                      radius={3}
-                      pathOptions={{ fillColor: '#9E9E9E', color: '#757575', fillOpacity: 0.6, weight: 1 }}
-                    >
-                      <Popup className="font-sans">
-                        <div className="p-1">
-                          <p className="font-bold text-[10px]">{tree.species}</p>
-                          <p className="text-[8px] opacity-60">Indivíduo Mapeado (Base)</p>
-                        </div>
-                      </Popup>
-                    </CircleMarker>
-                  ))}
+      {/* Layer 1: Base Population (Static Canvas Layer) */}
+      <StaticInventoryLayer trees={baseTrees} />
 
-                  {/* Layer 2: Research/Host (Green) & Galls (Orange) */}
+      {/* Layer 2: Research/Host (Green) & Galls (Orange) */}
                   {items.map((tree) => {
-                    const isGall = tree.tags.includes('Galha');
-                    const isHost = tree.tags.includes('Hospedeira');
+                    const tags = tree.tags || [];
+                    const isGall = tags.includes('Galha');
+                    const isHost = tags.includes('Hospedeira');
                     
                     return (
                       <Marker 
                         key={tree.id} 
-                        position={[tree.location.lat, tree.location.lng]}
+                        position={[tree.location?.lat || 0, tree.location?.lng || 0]}
                         icon={isGall ? gallIcon : isHost ? treeIcon : L.Icon.Default.prototype}
                       >
                         <Popup className="font-sans">
@@ -982,7 +1222,7 @@ export default function App() {
                             </h4>
                             <p className="text-[10px] text-[#5D4037] mb-2 font-medium">Categoria: {isGall ? 'Incidência de Galha' : 'Hospedeira Pesquisa'}</p>
                             <div className="flex flex-wrap gap-1">
-                              {tree.tags.map(t => (
+                              {tags.map(t => (
                                 <span key={t} className={`text-[8px] px-1.5 py-0.5 rounded border ${isGall ? 'bg-[#FFF3E0] border-[#E67E22]/30' : 'bg-[#E8F5E9] border-[#2D5A27]/30'}`}>
                                   {t}
                                 </span>
@@ -1032,10 +1272,20 @@ export default function App() {
             </div>
 
             {/* Quick Stats Bar */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
               <div className="bg-white p-5 rounded-2xl border border-[#D7CCC8] flex items-center gap-4 shadow-sm">
                 <div className="text-3xl font-serif font-bold text-[#E67E22]">{items.length}</div>
-                <div className="text-[10px] uppercase font-bold text-[#5D4037] leading-[1.2] tracking-wider">Árvores<br />Mapeadas</div>
+                <div className="text-[10px] uppercase font-bold text-[#5D4037] leading-[1.2] tracking-wider">Altas na<br />Nuvem</div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border border-[#D7CCC8] flex flex-col justify-center shadow-sm">
+                <div className="flex items-center gap-2">
+                  <div className="text-2xl font-serif font-bold text-[#5D4037]">{(inventoryStats.total / 1000).toFixed(0)}k</div>
+                  <div className="text-[8px] uppercase font-bold text-[#9E9E9E] tracking-tighter">Registros<br/>Totais</div>
+                </div>
+                <div className="w-full h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden">
+                  <div className="h-full bg-[#E67E22]" style={{ width: `${Math.min((inventoryStats.displayed/inventoryStats.total)*100 || 0, 100)}%` }}></div>
+                </div>
+                <p className="text-[8px] text-[#9E9E9E] mt-1 font-bold italic">Exibindo {inventoryStats.displayed} (Amostra)</p>
               </div>
               <div className="bg-white p-5 rounded-2xl border border-[#D7CCC8] flex items-center gap-4 shadow-sm">
                 <div className="text-3xl font-serif font-bold text-[#5D4037]">12%</div>
@@ -1105,33 +1355,36 @@ export default function App() {
                     <p className="text-xs font-bold uppercase tracking-widest">Sem registros</p>
                   </div>
                 )}
-                {items.map(tree => (
-                  <motion.div 
-                    layoutId={tree.id}
-                    key={tree.id} 
-                    className={`p-4 bg-[#FDFBF7] rounded-xl border-l-[6px] shadow-sm hover:shadow-md transition-all ${tree.tags.includes('Galha') ? 'border-[#E67E22]' : 'border-[#2D5A27]'}`}
-                  >
-                    <div className="flex justify-between items-start mb-1">
-                      <p className="font-bold text-[13px]">{tree.species}</p>
-                      <span className="text-[9px] font-bold text-[#5D4037]/60">{tree.location.region}</span>
-                    </div>
-                    <p className="text-[10px] text-[#5D4037] font-sans">
-                      {tree.tags.includes('Galha') ? '⚠️ Presença de patógeno detectado' : '✅ Espécime saudável'}
-                    </p>
-                    {tree.additionalInfo && Object.keys(tree.additionalInfo).length > 0 && (
-                      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[9px] text-[#5D4037]/70 italic">
-                        {Object.entries(tree.additionalInfo).slice(0, 4).map(([key, val]) => (
-                          <div key={key} className="truncate">
-                            <span className="font-bold">{key}:</span> {String(val)}
-                          </div>
-                        ))}
+                {items.map(tree => {
+                  const tags = tree.tags || [];
+                  return (
+                    <motion.div 
+                      layoutId={tree.id}
+                      key={tree.id} 
+                      className={`p-4 bg-[#FDFBF7] rounded-xl border-l-[6px] shadow-sm hover:shadow-md transition-all ${tags.includes('Galha') ? 'border-[#E67E22]' : 'border-[#2D5A27]'}`}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <p className="font-bold text-[13px]">{tree.species}</p>
+                        <span className="text-[9px] font-bold text-[#5D4037]/60">{tree.location?.region}</span>
                       </div>
-                    )}
-                    <div className="mt-2 flex gap-1">
-                       {tree.tags.map(t => <span key={t} className="text-[8px] bg-white border border-[#D7CCC8] px-1.5 py-0.5 rounded text-[#5D4037] font-bold">{t}</span>)}
-                    </div>
-                  </motion.div>
-                ))}
+                      <p className="text-[10px] text-[#5D4037] font-sans">
+                        {tags.includes('Galha') ? '⚠️ Presença de patógeno detectado' : '✅ Espécime saudável'}
+                      </p>
+                      {tree.additionalInfo && Object.keys(tree.additionalInfo).length > 0 && (
+                        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[9px] text-[#5D4037]/70 italic">
+                          {Object.entries(tree.additionalInfo).slice(0, 4).map(([key, val]) => (
+                            <div key={key} className="truncate">
+                              <span className="font-bold">{key}:</span> {String(val)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="mt-2 flex gap-1">
+                         {tags.map(t => <span key={t} className="text-[8px] bg-white border border-[#D7CCC8] px-1.5 py-0.5 rounded text-[#5D4037] font-bold">{t}</span>)}
+                      </div>
+                    </motion.div>
+                  );
+                })}
              </div>
           </div>
 
@@ -1149,12 +1402,20 @@ export default function App() {
             
             <div className="flex items-center justify-between">
                <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#BCAAA4]">Integração Labs</h4>
-               <button 
-                onClick={() => setShowTemplateModal(true)}
-                className="text-[10px] font-bold text-[#E67E22] hover:underline flex items-center gap-1"
-               >
-                 <FileSearch size={12} /> Ver Modelo de Tabela
-               </button>
+               <div className="flex gap-3">
+                <button 
+                  onClick={() => setShowSettings(true)}
+                  className="text-[10px] font-bold text-[#ecf0f1] hover:underline flex items-center gap-1"
+                >
+                  <Globe size={12} /> Config. Link
+                </button>
+                <button 
+                  onClick={() => setShowTemplateModal(true)}
+                  className="text-[10px] font-bold text-[#E67E22] hover:underline flex items-center gap-1"
+                >
+                  <FileSearch size={12} /> Ver Modelo de Tabela
+                </button>
+               </div>
             </div>
             
             <p className="text-[11px] text-[#D7CCC8] leading-relaxed font-sans">
