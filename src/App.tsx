@@ -74,73 +74,87 @@ function ChangeView({ center }: { center: [number, number] }) {
   return null;
 }
 
-// Componente de alta performance para renderizar centenas de milhares de pontos no Leaflet via Canvas
+import { get as idbGet, set as idbSet } from 'idb-keyval';
+
+// Componente de ALTA PERFORMANCE (Custom Canvas Layer)
+// Gerencia centenas de milhares de pontos desenhando diretamente no canvas context
 const StaticInventoryLayer = ({ trees }: { trees: TreeRecord[] }) => {
   const map = useMap();
-  const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    if (!map || trees.length === 0) {
-      if (layerGroupRef.current) {
-        map.removeLayer(layerGroupRef.current);
-        layerGroupRef.current = null;
+    if (!map || trees.length === 0) return;
+
+    const CanvasLayer = L.Layer.extend({
+      onAdd: function(map: L.Map) {
+        const pane = map.getPane('overlayPane');
+        const canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated') as HTMLCanvasElement;
+        canvas.style.pointerEvents = 'none';
+        this._canvas = canvas;
+        pane?.appendChild(canvas);
+        map.on('viewreset', this._update, this);
+        map.on('zoom', this._update, this);
+        map.on('moveend', this._update, this);
+        this._update();
+      },
+      onRemove: function(map: L.Map) {
+        L.DomUtil.remove(this._canvas);
+        map.off('viewreset', this._update, this);
+        map.off('zoom', this._update, this);
+        map.off('moveend', this._update, this);
+      },
+      _update: function() {
+        const canvas = this._canvas;
+        const size = map.getSize();
+        const origin = map.getPixelOrigin();
+        
+        canvas.width = size.x;
+        canvas.height = size.y;
+        
+        const topLeft = map.containerPointToLayerPoint([0, 0]);
+        L.DomUtil.setPosition(canvas, topLeft);
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        
+        const zoom = map.getZoom();
+        // Escalonamento mais agressivo para que os pontos fiquem visíveis no zoom baixo e grandes no zoom alto
+        const radius = zoom <= 10 ? 0.4 : 
+                       zoom <= 12 ? 0.7 : 
+                       zoom <= 14 ? 1.5 : 
+                       zoom <= 16 ? 4 : 
+                       zoom <= 18 ? 8 : 12;
+        
+        ctx.fillStyle = 'rgba(158, 158, 158, 0.4)';
+        ctx.strokeStyle = 'rgba(117, 117, 117, 0.3)';
+        ctx.lineWidth = 0.5;
+
+        const bounds = map.getBounds();
+
+        for (let i = 0; i < trees.length; i++) {
+          const tree = trees[i];
+          const lat = tree.location.lat;
+          const lng = tree.location.lng;
+
+          // Frustum culling for performance
+          if (lat < bounds.getSouth() || lat > bounds.getNorth() || lng < bounds.getWest() || lng > bounds.getEast()) {
+            continue;
+          }
+
+          const dot = map.latLngToContainerPoint([lat, lng]);
+          ctx.beginPath();
+          ctx.arc(dot.x, dot.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          if (zoom > 14) ctx.stroke();
+        }
       }
-      return;
-    }
+    });
 
-    // Limpeza para evitar duplicidade em re-renders
-    if (layerGroupRef.current) {
-      map.removeLayer(layerGroupRef.current);
-    }
-
-    const canvasRenderer = L.canvas({ padding: 0.1 });
-    const markers: L.CircleMarker[] = [];
-
-    // Removida a amostragem: Processamos TODOS os pontos (260k+)
-    // Otimização: O Leaflet Canvas lida bem com grandes volumes se desativarmos interatividade
-    
-    // Cálculo de raio dinâmico baseado no zoom atual
-    const getDynamicRadius = (z: number) => {
-      if (z <= 12) return 0.8;
-      if (z <= 14) return 1.5;
-      if (z <= 16) return 3;
-      if (z >= 18) return 6;
-      return 4;
-    };
-
-    const currentRadius = getDynamicRadius(map.getZoom());
-
-    for (let i = 0; i < trees.length; i++) {
-      const tree = trees[i];
-      if (!tree || !tree.location || !tree.location.lat || !tree.location.lng) continue;
-      
-      const marker = L.circleMarker([tree.location.lat, tree.location.lng], {
-        renderer: canvasRenderer,
-        radius: currentRadius,
-        fillColor: '#9E9E9E',
-        color: '#757575',
-        weight: 0.2,
-        fillOpacity: 0.3,
-        interactive: false
-      });
-      markers.push(marker);
-    }
-
-    layerGroupRef.current = L.layerGroup(markers).addTo(map);
-
-    // Adiciona listener para ajustar o tamanho dos pontos ao mudar o zoom
-    const handleZoomEnd = () => {
-      const newRadius = getDynamicRadius(map.getZoom());
-      markers.forEach(m => m.setRadius(newRadius));
-    };
-
-    map.on('zoomend', handleZoomEnd);
+    const layer = new (CanvasLayer as any)();
+    layer.addTo(map);
 
     return () => {
-      map.off('zoomend', handleZoomEnd);
-      if (layerGroupRef.current && map) {
-        map.removeLayer(layerGroupRef.current);
-      }
+      map.removeLayer(layer);
     };
   }, [map, trees]);
 
@@ -194,7 +208,15 @@ export default function App() {
     
     const autoLoadFile = async (url: string) => {
       try {
-        console.log("Tentando carregamento automático:", url);
+        setUploadProgress({ current: 0, total: 0, step: 'Verificando cache local...' });
+        const cachedData = await idbGet('base_inventory_cache');
+        if (cachedData && cachedData.length > 0) {
+          console.log("Inventário carregado do cache local (IndexedDB)");
+          processLocalInventory(cachedData, false); // Don't re-save to IDB
+          return;
+        }
+
+        console.log("Tentando carregamento automático via URL:", url);
         
         let targetUrl = url;
         // Auto-fix for Google Sheets URLs
@@ -218,11 +240,12 @@ export default function App() {
         
         if (data.length > 0) {
            console.log(`Inventário persistente carregado: ${data.length} registros.`);
-           processLocalInventory(data);
+           processLocalInventory(data, true); // Save to IDB
         }
       } catch (err) {
         console.error("Erro no carregamento automático:", err);
-        // Não alertamos aqui para não ser intrusivo no boot, mas logamos
+      } finally {
+        setUploadProgress(null);
       }
     };
 
@@ -233,10 +256,9 @@ export default function App() {
     }
   }, []);
 
-  const processLocalInventory = (data: any[]) => {
+  const processLocalInventory = (data: any[], saveToCache = true) => {
     const totalItems = data.length;
     const localTrees: TreeRecord[] = [];
-    // Aumentamos o limite para processar o inventário completo (BH tem ~260k)
     const MAX_PROCESS = 300000;
     const step = totalItems > MAX_PROCESS ? Math.floor(totalItems / MAX_PROCESS) : 1;
     
@@ -267,6 +289,13 @@ export default function App() {
         });
       }
     }
+
+    if (saveToCache && localTrees.length > 0) {
+      idbSet('base_inventory_cache', data)
+        .then(() => console.log("Inventário internalizado no cache local."))
+        .catch(e => console.error("Falha ao salvar cache:", e));
+    }
+
     setBaseTrees(localTrees);
   };
 
@@ -295,11 +324,11 @@ export default function App() {
       if (u) {
         setUser(u);
       } else {
-        // MODO TÉCNICO: Permite ver o dashboard sem login real para configuração
+        // LOGIN DESATIVADO: Sempre logado como o pesquisador principal ou convidado
         setUser({
-          uid: 'convidado_tecnico',
-          displayName: 'Visitante Técnico',
-          email: 'guest@config.mode'
+          uid: 'pesquisador_principal',
+          displayName: 'Pesquisador Principal',
+          email: 'pesquisa@galhas.app'
         } as User);
       }
       setLoading(false);
@@ -503,11 +532,7 @@ export default function App() {
       console.log("No file selected");
       return;
     }
-    if (!user || user.uid === 'convidado_tecnico') {
-      alert("O processamento de planilhas exige uma conta autenticada para gravar no bando de dados. Por favor, faça login clicando em 'Acessar Conta' no topo.");
-      setShowLoginModal(true);
-      return;
-    }
+    if (!user) return; // User is always set now
 
     setIsUploadingXlsx(true);
     setUploadProgress({ current: 0, total: 0, step: 'Lendo arquivo...' });
@@ -699,11 +724,7 @@ export default function App() {
 
   const handleAddRecord = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || user.uid === 'convidado_tecnico') {
-       alert("Para gravar novos dados no banco, você precisa de uma conta real. Clique em 'Acessar Conta' no topo.");
-       setShowLoginModal(true);
-       return;
-    }
+    if (!user) return; // User is always set now
 
     try {
       const path = 'tree_records';
@@ -765,97 +786,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#FDFBF7] font-sans text-[#3E2723] flex flex-col">
-      {/* Login Modal for Test Users */}
-      <AnimatePresence>
-        {showLoginModal && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-[#3E2723]/80 backdrop-blur-md z-[210] flex items-center justify-center p-6"
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              className="bg-white p-8 rounded-[32px] shadow-2xl max-w-sm w-full relative"
-            >
-              <button 
-                onClick={() => setShowLoginModal(false)}
-                className="absolute top-6 right-6 text-[#9E9E9E] hover:text-black"
-              >
-                <X size={24} />
-              </button>
-
-              <div className="flex flex-col items-center gap-6 mb-8">
-                <div className="bg-[#2D5A27] p-4 rounded-3xl text-white shadow-lg">
-                  <Leaf size={32} />
-                </div>
-                <div className="text-center">
-                  <h2 className="text-2xl font-serif font-bold text-[#2D5A27]">Login / Registro</h2>
-                  <p className="text-sm text-[#5D4037] mt-1">Acesse com sua conta ou crie um apelido</p>
-                </div>
-              </div>
-
-              <form onSubmit={handleTestLogin} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-[#5D4037] ml-1">Apelido</label>
-                  <input 
-                    type="text" 
-                    required
-                    placeholder="Isabela_Evelyn..."
-                    className="w-full bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl px-5 py-3 text-sm focus:border-[#2D5A27] focus:outline-none transition-all"
-                    value={loginForm.nickname}
-                    onChange={e => setLoginForm({...loginForm, nickname: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold uppercase tracking-widest text-[#5D4037] ml-1">Senha</label>
-                  <input 
-                    type="password" 
-                    required
-                    placeholder="••••••••"
-                    className="w-full bg-[#FDFBF7] border-2 border-[#D7CCC8]/30 rounded-2xl px-5 py-3 text-sm focus:border-[#2D5A27] focus:outline-none transition-all"
-                    value={loginForm.password}
-                    onChange={e => setLoginForm({...loginForm, password: e.target.value})}
-                  />
-                </div>
-                <button 
-                  type="submit"
-                  disabled={isLoggingIn}
-                  className="w-full bg-[#2D5A27] text-white py-4 rounded-2xl font-bold shadow-lg hover:shadow-2xl hover:bg-[#1B3A18] transition-all flex items-center justify-center gap-3 mt-4 disabled:opacity-50"
-                >
-                  {isLoggingIn ? <Loader2 className="animate-spin" /> : <>Entrar na Plataforma <LogIn size={20} /></>}
-                </button>
-
-                <div className="mt-2 text-center">
-                  <p className="text-[10px] text-[#9E9E9E] font-medium">
-                    Sugestão: Novos usuários podem usar qualquer apelido e senha (min. 6 caracteres).
-                  </p>
-                </div>
-
-                <div className="relative my-6">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-[#D7CCC8]/50"></div>
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-white px-2 text-[#9E9E9E]">Ou acesse com</span>
-                  </div>
-                </div>
-
-                <button 
-                  type="button"
-                  onClick={handleGoogleLogin}
-                  disabled={isLoggingIn}
-                  className="w-full bg-white border-2 border-[#D7CCC8]/30 text-[#3E2723] py-4 rounded-2xl font-bold hover:bg-gray-50 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                >
-                  <Globe size={20} className="text-[#4285F4]" /> Continuar com Google
-                </button>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Template Guide Modal */}
       <AnimatePresence>
         {showTemplateModal && (
@@ -1054,43 +984,20 @@ export default function App() {
           </motion.div>
           
           <div className="flex items-center gap-6">
-            {user ? (
-              <div className="flex items-center gap-4">
-                <div className="hidden lg:block text-right">
-                  <p className="text-[10px] text-[#E8F5E9] uppercase tracking-wider font-sans opacity-80">
-                    {user.email?.includes('test.com') ? 'Acesso Especial' : 'Pesquisador Logado'}
-                  </p>
-                  <p className="text-sm font-bold text-white">{user.displayName || user.email?.split('@')[0]}</p>
-                </div>
-                <button 
-                  onClick={() => setIsAdding(!isAdding)}
-                  className="bg-[#E67E22] hover:bg-[#D35400] text-white px-5 py-2.5 rounded-full font-bold transition-all shadow-[0_4px_0_#D35400] hover:shadow-[0_2px_0_#D35400] active:translate-y-0.5 active:shadow-none flex items-center gap-2 text-sm"
-                >
-                  <Plus size={18} /> <span className="hidden sm:inline">Novo Registro</span>
-                </button>
-                <button 
-                  onClick={handleLogout}
-                  className="p-2.5 hover:bg-white/10 rounded-full transition-colors text-white"
-                  title="Sair"
-                >
-                  <LogOut size={20} />
-                </button>
+            <div className="flex items-center gap-4">
+              <div className="hidden lg:block text-right">
+                <p className="text-[10px] text-[#E8F5E9] uppercase tracking-wider font-sans opacity-80">
+                  Pesquisador Ativo
+                </p>
+                <p className="text-sm font-bold text-white">{user?.displayName || 'Sistema'}</p>
               </div>
-            ) : (
-              <div className="flex items-center gap-4">
-                {user?.uid === 'convidado_tecnico' && (
-                  <span className="bg-amber-100 text-amber-800 text-[10px] px-2 py-1 rounded-full font-bold animate-pulse hidden md:block">
-                    MODO TÉCNICO
-                  </span>
-                )}
-                <button 
-                  onClick={() => setShowLoginModal(true)}
-                  className="bg-[#E67E22] text-white px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg hover:bg-[#D35400] transition-all flex items-center gap-2"
-                >
-                  <LogIn size={14} /> {user?.uid === 'convidado_tecnico' ? 'Acessar Conta' : 'Mudar Usuário'}
-                </button>
-              </div>
-            )}
+              <button 
+                onClick={() => setIsAdding(!isAdding)}
+                className="bg-[#E67E22] hover:bg-[#D35400] text-white px-5 py-2.5 rounded-full font-bold transition-all shadow-[0_4px_0_#D35400] hover:shadow-[0_2px_0_#D35400] active:translate-y-0.5 active:shadow-none flex items-center gap-2 text-sm"
+              >
+                <Plus size={18} /> <span className="hidden sm:inline">Novo Registro</span>
+              </button>
+            </div>
           </div>
         </div>
       </header>
