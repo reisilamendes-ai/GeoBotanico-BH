@@ -10,7 +10,7 @@ import {
   Plus, LogIn, LogOut, Send, 
   Loader2, CheckCircle2, List,
   BrainCircuit, Crosshair, FileSpreadsheet,
-  Globe, X, Leaf, ChevronRight
+  Globe, X, Leaf, ChevronRight, AlertCircle
 } from 'lucide-react';
 import { 
   collection, addDoc, onSnapshot, 
@@ -146,11 +146,12 @@ const StaticInventoryLayer = ({ trees }: { trees: TreeRecord[] }) => {
           // Culling geográfico rigoroso
           if (lat < south || lat > north || lng < west || lng > east) continue;
 
-          // latLngToContainerPoint é o mais preciso para alinhamento com o tile principal
-          const point = map.latLngToContainerPoint([lat, lng]);
+          // latLngToLayerPoint alinha perfeitamente com o sistema de coordenadas do Leaflet
+          const point = map.latLngToLayerPoint([lat, lng]);
           
+          // Ajustamos o ponto relativo ao topo-esquerdo do canvas posicionado pelo Leaflet
           ctx.beginPath();
-          ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          ctx.arc(point.x - topLeft.x, point.y - topLeft.y, radius, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -416,7 +417,7 @@ export default function App() {
     }
 
     // Records (Galls/Research) stay in the cloud
-    const q = query(collection(db, 'tree_records'), orderBy('createdAt', 'desc'), limit(100)); // Limite bem baixo p/ poupar cota gratuita
+    const q = query(collection(db, 'tree_records'), orderBy('createdAt', 'desc'), limit(100));
     const unsubscribeFirestore = onSnapshot(q, (snapshot) => {
       const records = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -424,7 +425,14 @@ export default function App() {
       })) as TreeRecord[];
       setItems(records);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'tree_records');
+      console.error("Firestore Error Handling:", error);
+      // Fallback para evitar crash quando a cota atinge o limite
+      if (error.message.includes("Quota") || error.message.includes("quota")) {
+        console.warn("MODO OFFLINE ATIVADO: Cota do Firebase excedida para hoje.");
+        // Não jogamos erro para o handleFirestoreError para não travar a UI
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'tree_records');
+      }
     });
 
     // WE REMOVED THE base_trees Firestore fetch to save quota.
@@ -880,7 +888,32 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto w-full p-6 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1">
+      <main className="max-w-7xl mx-auto w-full p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 md:gap-8 flex-1">
+        {/* Aviso de Cota Excedida / Modo Offline */}
+        <AnimatePresence>
+          {(!items.length && !loading) && (
+            <motion.div 
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              className="lg:col-span-12 overflow-hidden"
+            >
+              <div className="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 flex items-center gap-4 text-amber-900 shadow-sm mb-4">
+                <AlertCircle className="text-amber-500 shrink-0" size={24} />
+                <div className="flex-1">
+                  <p className="text-xs font-bold uppercase tracking-wider mb-1">Cota do Banco de Dados Atingida</p>
+                  <p className="text-[11px] opacity-80 leading-relaxed">
+                    A plataforma atingiu o limite gratuito de consultas diárias ao Firebase. Os dados de pesquisa novos podem não aparecer até o reset (24h). 
+                    <strong> O mapa continua funcional</strong> com a base de 260 mil árvores arquivada no seu dispositivo.
+                  </p>
+                </div>
+                <div className="hidden md:block">
+                  <p className="text-[10px] bg-white px-3 py-1.5 rounded-full border border-amber-200 font-bold">Modo Offline Ativo</p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         <div className={`flex flex-col gap-8 transition-all duration-300 ${sidebarOpen ? 'lg:col-span-8' : 'lg:col-span-12'}`}>
           <AnimatePresence>
             {isAdding && (
